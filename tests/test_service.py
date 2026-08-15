@@ -114,6 +114,29 @@ class BotServiceVisionTests(unittest.TestCase):
         self.assertEqual(result["bubbles"], ["工具结果已收到"])
         self.assertEqual(len(chat.calls), 2)
 
+    def test_time_query_uses_allowlisted_tool_when_model_omits_marker(self):
+        responses = iter(["我直接回答一下", "现在是工具返回的时间"])
+        chat = FakeProvider("")
+
+        def complete(messages, images=None):
+            chat.calls.append((messages, images or []))
+            return next(responses)
+
+        chat.complete = complete
+        settings = Settings.from_values(
+            {
+                "LLM_API_KEY": "chat-key",
+                "LLM_BASE_URL": "https://chat.example/v1",
+                "LLM_MODEL": "chat-model",
+                "TOOLS_ENABLED": "true",
+                "TOOL_ALLOWLIST": "get_time",
+            }
+        )
+        result = BotService(settings, provider=chat).reply({"message": "现在几点", "context": []})
+        self.assertEqual(result["bubbles"], ["现在是工具返回的时间"])
+        self.assertEqual(len(chat.calls), 2)
+        self.assertIn("get_time:", chat.calls[1][0][-1]["content"])
+
     def test_summary_endpoint_shape_is_bounded(self):
         chat = FakeProvider('{"summary":"short","facts":["likes books"]}')
         service = BotService(self.settings("off"), provider=chat)

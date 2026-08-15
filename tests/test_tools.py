@@ -1,6 +1,6 @@
 import unittest
 
-from onebot_llm_bridge.tools import ToolRegistry, parse_tool_calls
+from onebot_llm_bridge.tools import ToolRegistry, is_time_query, parse_tool_calls
 
 
 class ToolTests(unittest.TestCase):
@@ -11,3 +11,8 @@ class ToolTests(unittest.TestCase):
         registry = ToolRegistry({"safe": lambda: "ok"})
         self.assertEqual(registry.run_allowed(["safe"], ()), [])
         self.assertEqual(registry.run_allowed(["safe"], ("safe",))[0]["result"], "ok")
+
+    def test_time_queries_are_recognized(self) -> None:
+        self.assertTrue(is_time_query("现在几点"))
+        self.assertTrue(is_time_query("what time is it?"))
+        self.assertFalse(is_time_query("今天吃什么"))

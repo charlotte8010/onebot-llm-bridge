@@ -25,7 +25,7 @@ from .models import EventError, NormalizedMessage, is_meaningful, json_context
 from .policy import decide_reply
 from .providers import OpenAICompatibleProvider, ProviderError
 from .remote_memory import RemoteMemoryError, RemoteMemoryStore, SupabaseRestClient
-from .tools import ToolRegistry, parse_tool_calls
+from .tools import ToolRegistry, is_time_query, parse_tool_calls
 
 
 MAX_BODY_BYTES = 1_048_576
@@ -223,7 +223,11 @@ class BotService:
                 catalog_for_prompt(self.emoji_catalog), ensure_ascii=False
             )
         if self.settings.tools_enabled:
-            system += " Available allowlisted tools may be requested with [[TOOL:tool_name]]."
+            system += (
+                " Available allowlisted tools may be requested with the exact marker [[TOOL:tool_name]]; "
+                "for example, use [[TOOL:get_time]] when the user asks for the current time or date. "
+                "Never show tool markers in the final answer."
+            )
         persona = self.persona()
         if persona:
             system += "\n\nUser-provided persona:\n" + persona
@@ -270,6 +274,13 @@ class BotService:
             print("[vision] main model rejected image input; retrying as text")
             content = self.provider.complete(messages, images=[])
         tool_calls = parse_tool_calls(content) if self.settings.tools_enabled else []
+        if (
+            self.settings.tools_enabled
+            and "get_time" in self.settings.tool_allowlist
+            and "get_time" not in tool_calls
+            and is_time_query(message)
+        ):
+            tool_calls.append("get_time")
         if tool_calls:
             results = self.tools.run_allowed(tool_calls, self.settings.tool_allowlist)
             tool_text = "\n".join(f"{item['name']}: {item['result']}" for item in results)
