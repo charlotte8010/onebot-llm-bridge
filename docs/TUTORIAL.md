@@ -397,3 +397,14 @@ model. Restart the bot service and bridge after changing `.env.local`.
 The resolver accepts data URLs, HTTP(S) URLs, local paths, and NapCat's
 `get_image` response. It limits downloads to 10 MiB. A failed image lookup is
 logged and the message continues as text instead of becoming an empty reply.
+
+Before restarting the services, you can check whether both providers are
+reachable and list the model IDs they expose:
+
+```powershell
+python .\check_models.py
+```
+
+Some relay services do not implement `/models`; in that case the diagnostic
+reports the limitation, and you can still keep using the explicitly configured
+model name.

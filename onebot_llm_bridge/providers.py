@@ -81,3 +81,28 @@ class OpenAICompatibleProvider:
             raise ProviderError("model provider returned an empty reply")
         return result.strip()
 
+    def list_models(self) -> list[str]:
+        """Return model IDs from the optional OpenAI-compatible /models endpoint."""
+        request = Request(
+            f"{self.base_url}/models",
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            method="GET",
+        )
+        try:
+            with self.opener(request, timeout=self.timeout) as response:
+                raw = response.read().decode("utf-8")
+        except HTTPError as exc:
+            raise ProviderError(f"model listing returned HTTP {exc.code}") from exc
+        except (URLError, TimeoutError, OSError) as exc:
+            raise ProviderError(f"model listing request failed: {type(exc).__name__}") from exc
+        try:
+            data = json.loads(raw)
+            entries = data["data"]
+            result = [
+                item["id"]
+                for item in entries
+                if isinstance(item, Mapping) and isinstance(item.get("id"), str) and item["id"]
+            ]
+        except (KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise ProviderError("model listing returned an invalid response") from exc
+        return sorted(set(result))

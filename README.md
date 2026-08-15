@@ -25,6 +25,16 @@ image. If an image cannot be downloaded or decoded, the bridge logs a short
 failure and continues with the text part of the message. It never sends the
 NapCat access token to the model provider.
 
+To check whether a new provider URL and key expose an OpenAI-compatible model
+list, run:
+
+```powershell
+python .\check_models.py
+```
+
+This prints the configured chat/vision model names and the result of each
+`/models` request, but never prints API keys.
+
 一个面向普通用户和开发者的通用 QQ AI Bot 框架。
 
 它通过 [OneBot 11](https://github.com/botuniverse/onebot-11) 接入 NapCat、LLOneBot 等 QQ 客户端，再把消息交给 OpenAI 兼容接口或其他模型服务。项目不绑定任何人的人设、QQ 号、群号和聊天记录，复制配置后即可开始使用。

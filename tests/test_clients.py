@@ -61,6 +61,20 @@ class ClientTests(unittest.TestCase):
             "data:image/png;base64,abc",
         )
 
+    def test_provider_lists_model_ids(self) -> None:
+        def opener(request, timeout):
+            self.assertTrue(request.full_url.endswith("/models"))
+            self.assertEqual(request.get_header("Authorization"), "Bearer secret")
+            return FakeResponse({"data": [{"id": "z-model"}, {"id": "a-model"}, {"id": "z-model"}]})
+
+        provider = OpenAICompatibleProvider(
+            api_key="secret",
+            base_url="https://example.test/v1",
+            model="chat",
+            opener=opener,
+        )
+        self.assertEqual(provider.list_models(), ["a-model", "z-model"])
+
     def test_napcat_client_sends_access_token_and_action(self) -> None:
         requests = []
 
