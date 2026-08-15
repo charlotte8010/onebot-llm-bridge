@@ -211,6 +211,9 @@ class BotService:
         system = (
             "You are a helpful QQ chat assistant. Reply naturally and concisely. "
             "Do not invent user facts. Return only the reply text. "
+            "Recent context entries include speaker=other for the human and speaker=bot for your own older messages. "
+            "Treat context as background only: the New message is the current request and must drive the reply. "
+            "Never answer an older context message again just because it is nearby, and do not repeat your own old wording. "
             "Use [[BUBBLE]] between separate QQ bubbles when useful. Choose bubble count from the topic and "
             "the number of natural thoughts: one is common for a flat/simple reply, two for two separate thoughts, "
             "three or four are more natural for a work or life complaint, making process, or engaged game/work discussion, "
@@ -635,7 +638,7 @@ class Bridge:
                 {
                     "conversation": first.conversation_key,
                     "message": "\n".join(item.text for item in messages if item.text),
-                    "context": [item.context_dict() for item in [*context, *messages]][-100:],
+                    "context": [item.context_dict(self.settings.bot_qq) for item in [*context, *messages]][-100:],
                     "target_message_ids": target_ids,
                     "allow_reactions": self.settings.reaction_mode == "like",
                     "emoji_catalog": catalog_for_prompt(self.emoji_catalog),
@@ -807,7 +810,7 @@ class Bridge:
             local_facts = self.memory_store.load_facts(f"user:{first.sender_id}") if self.memory_store else []
             payload = {
                 "message": "\n".join(item.text for item in messages if item.text),
-                "context": json.loads(json_context(model_context)),
+                "context": json.loads(json_context(model_context, self.settings.bot_qq)),
                 "conversation": first.conversation_key,
                 "images": images,
                 "facts": list(dict.fromkeys([*local_facts, *remote_facts]))[:100],
@@ -888,7 +891,7 @@ class Bridge:
             remote_context = self.remote_memory.load_context(conversation_key, 100)
             if len(remote_context.messages) < self.settings.summary_min_messages:
                 return
-            context = [item.context_dict() for item in remote_context.messages]
+            context = [item.context_dict(self.settings.bot_qq) for item in remote_context.messages]
             result = self._summary_request(
                 {
                     "conversation": conversation_key,

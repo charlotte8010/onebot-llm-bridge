@@ -10,6 +10,7 @@ class ModelTests(unittest.TestCase):
                 "post_type": "message",
                 "message_type": "private",
                 "user_id": 123,
+                "self_id": 123,
                 "message_id": 99,
                 "message": [
                     {"type": "text", "data": {"text": "你好"}},
@@ -40,3 +41,26 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(message.conversation_key, "group:456")
         self.assertEqual(message.sender_id, "123")
 
+    def test_context_marks_bot_and_other_speakers(self) -> None:
+        message = NormalizedMessage.from_onebot(
+            {
+                "post_type": "message",
+                "message_type": "private",
+                "user_id": 123,
+                "self_id": 123,
+                "message_id": 99,
+                "message": "hello",
+            }
+        )
+        self.assertEqual(message.context_dict("123")["speaker"], "bot")
+        self.assertTrue(message.is_self)
+        other = NormalizedMessage.from_onebot(
+            {
+                "post_type": "message",
+                "message_type": "private",
+                "user_id": 456,
+                "message_id": 100,
+                "message": "hello",
+            }
+        )
+        self.assertEqual(other.context_dict("123")["speaker"], "other")

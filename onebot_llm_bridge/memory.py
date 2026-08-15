@@ -64,6 +64,7 @@ class SQLiteMemoryStore:
             "segments": list(message.segments),
             "reply_to": message.reply_to,
             "to_me": message.to_me,
+            "is_self": message.is_self,
         }
         with self._lock:
             self._connection.execute(
@@ -110,6 +111,7 @@ class SQLiteMemoryStore:
                         segments=segments,
                         reply_to=payload.get("reply_to"),
                         to_me=bool(payload.get("to_me")),
+                        is_self=bool(payload.get("is_self")),
                     )
                 )
             except (KeyError, TypeError, ValueError, json.JSONDecodeError):

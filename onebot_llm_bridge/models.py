@@ -47,6 +47,7 @@ class NormalizedMessage:
     segments: tuple[dict[str, Any], ...] = field(default_factory=tuple)
     reply_to: str | None = None
     to_me: bool = False
+    is_self: bool = False
     raw: Mapping[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @property
@@ -94,15 +95,20 @@ class NormalizedMessage:
             segments=segments,
             reply_to=str(reply_id) if reply_id is not None else None,
             to_me=bool(event.get("to_me")),
+            is_self=bool(event.get("self_id")) and str(event.get("self_id")) == str(user_id),
             raw=dict(event),
         )
 
-    def context_dict(self) -> dict[str, Any]:
+    def context_dict(self, bot_qq: str = "") -> dict[str, Any]:
+        speaker = "unknown"
+        if bot_qq or self.is_self:
+            speaker = "bot" if self.is_self or self.sender_id == bot_qq else "other"
         return {
             "conversation": self.conversation_key,
             "sender_id": self.sender_id,
             "sender_name": self.sender_name,
             "message_id": self.message_id,
+            "speaker": speaker,
             "text": self.text,
         }
 
@@ -111,6 +117,5 @@ def is_meaningful(message: NormalizedMessage) -> bool:
     return bool(message.text or any(segment["type"] in {"image", "record", "video"} for segment in message.segments))
 
 
-def json_context(messages: list[NormalizedMessage]) -> str:
-    return json.dumps([message.context_dict() for message in messages], ensure_ascii=False)
-
+def json_context(messages: list[NormalizedMessage], bot_qq: str = "") -> str:
+    return json.dumps([message.context_dict(bot_qq) for message in messages], ensure_ascii=False)

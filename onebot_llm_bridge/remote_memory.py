@@ -168,6 +168,7 @@ class RemoteMemoryStore:
                         text=str(row.get("content_text", "")),
                         segments=tuple(segments),
                         reply_to=str(row["reply_to"]) if row.get("reply_to") else None,
+                        is_self=bool(row.get("is_self")),
                         to_me=False,
                     )
                 )
