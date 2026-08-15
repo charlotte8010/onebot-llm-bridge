@@ -655,6 +655,7 @@ class ControlPanel(tk.Tk):
         behavior.columnconfigure(1, weight=1)
         behavior.columnconfigure(3, weight=1)
         self.group_mode = self._combo(behavior, 0, 0, "群聊模式", "GROUP_MODE", ("mention", "smart", "all", "off"), "mention")
+        self.decision_mode = self._combo(behavior, 0, 2, "智能判断", "DECISION_MODE", ("heuristic", "model"), "heuristic")
         self.group_allowlist = self._entry(behavior, 1, "群聊白名单", "GROUP_ALLOWLIST")
         self.bot_qq = self._entry(behavior, 2, "Bot QQ", "BOT_QQ")
         self.bot_names = self._entry(behavior, 3, "Bot 名称", "BOT_NAMES")
@@ -690,6 +691,14 @@ class ControlPanel(tk.Tk):
         self.napcat_boot = self._entry(network, 6, "NapCat 启动程序", "NAPCAT_BOOT")
         self.napcat_qq = self._entry(network, 7, "QQ 程序", "NAPCAT_QQ")
         self.napcat_hook = self._entry(network, 8, "NapCat Hook", "NAPCAT_HOOK")
+        self.supabase_url = self._entry(network, 9, "Supabase URL", "SUPABASE_URL")
+        self.supabase_key = self._entry(network, 10, "Supabase Secret Key", "SUPABASE_SECRET_KEY", secret=True)
+        self.supabase_timeout = self._entry(network, 11, "Supabase timeout (s)", "SUPABASE_TIMEOUT_SECONDS", "10", column=2)
+        self.remote_memory_mode = self._combo(network, 12, 0, "Remote memory", "REMOTE_MEMORY_MODE", ("local_first", "coordinated"), "local_first")
+        self.summary_enabled = tk.BooleanVar(value=self._value("SUMMARY_ENABLED", "false").lower() in {"1", "true", "yes", "on"})
+        ttk.Checkbutton(network, text="Enable automatic summaries", variable=self.summary_enabled).grid(row=13, column=0, columnspan=2, sticky="w", pady=4)
+        self.summary_min_messages = self._entry(network, 14, "Summary trigger", "SUMMARY_MIN_MESSAGES", "40")
+        self.summary_delay = self._entry(network, 14, "Summary delay (s)", "SUMMARY_DELAY_SECONDS", "10", column=2)
         ttk.Button(network, text="选择", command=lambda: self._select_path(self.napcat_boot, "选择 NapCat 启动程序")).grid(row=6, column=2, padx=(8, 0), pady=4)
         ttk.Button(network, text="选择", command=lambda: self._select_path(self.napcat_qq, "选择 QQ 程序")).grid(row=7, column=2, padx=(8, 0), pady=4)
         ttk.Button(network, text="选择", command=lambda: self._select_path(self.napcat_hook, "选择 NapCat Hook")).grid(row=8, column=2, padx=(8, 0), pady=4)
@@ -865,7 +874,7 @@ class ControlPanel(tk.Tk):
             "LLM_MAX_TOKENS": self.max_tokens.get().strip(), "LLM_TIMEOUT_SECONDS": self.timeout.get().strip(),
             "VISION_MODE": self.vision_mode.get().strip(), "VISION_API_KEY": self.vision_api_key.get().strip(), "VISION_BASE_URL": self.vision_base_url.get().strip(),
             "VISION_MODEL": self.vision_model.get().strip(), "VISION_MAX_TOKENS": self.vision_max_tokens.get().strip(), "VISION_TIMEOUT_SECONDS": self.vision_timeout.get().strip(),
-            "GROUP_MODE": self.group_mode.get().strip(), "GROUP_ALLOWLIST": self.group_allowlist.get().strip(), "BOT_QQ": self.bot_qq.get().strip(), "BOT_NAMES": self.bot_names.get().strip(),
+            "GROUP_MODE": self.group_mode.get().strip(), "DECISION_MODE": self.decision_mode.get().strip(), "GROUP_ALLOWLIST": self.group_allowlist.get().strip(), "BOT_QQ": self.bot_qq.get().strip(), "BOT_NAMES": self.bot_names.get().strip(),
             "DEBOUNCE_SECONDS": self.debounce.get().strip(), "FOLLOWUP_SECONDS": self.followup.get().strip(), "CONTEXT_MESSAGES": self.context_messages.get().strip(), "MEMORY_DB": self.memory_db.get().strip(),
             "REACTION_MODE": self.reaction_mode.get().strip(), "ACTIVE_ENABLED": "true" if self.active_enabled.get() else "false",
             "ACTIVE_INTERVAL_MINUTES": self.active_interval.get().strip(), "ACTIVE_TARGET_TYPE": self.active_target_type.get().strip(),
@@ -875,6 +884,10 @@ class ControlPanel(tk.Tk):
             "NAPCAT_API_URL": self.napcat_url.get().strip(), "NAPCAT_ACCESS_TOKEN": self.napcat_access.get().strip(), "NAPCAT_EVENT_TOKEN": self.event_token.get().strip(),
             "BOT_SERVICE_TOKEN": self.service_token.get().strip(), "BRIDGE_PORT": self.bridge_port.get().strip(), "BOT_SERVICE_PORT": self.bot_port.get().strip(),
             "NAPCAT_BOOT": self.napcat_boot.get().strip(), "NAPCAT_QQ": self.napcat_qq.get().strip(), "NAPCAT_HOOK": self.napcat_hook.get().strip(),
+            "SUPABASE_URL": self.supabase_url.get().strip(), "SUPABASE_SECRET_KEY": self.supabase_key.get().strip(),
+            "SUPABASE_TIMEOUT_SECONDS": self.supabase_timeout.get().strip(), "REMOTE_MEMORY_MODE": self.remote_memory_mode.get().strip(),
+            "SUMMARY_ENABLED": "true" if self.summary_enabled.get() else "false", "SUMMARY_MIN_MESSAGES": self.summary_min_messages.get().strip(),
+            "SUMMARY_DELAY_SECONDS": self.summary_delay.get().strip(),
         }
 
     def _environment(self) -> dict[str, str]:
@@ -898,7 +911,13 @@ class ControlPanel(tk.Tk):
             for key in ("BRIDGE_PORT", "BOT_SERVICE_PORT"):
                 port = int(values.get(key, ""))
                 if not 1 <= port <= 65535:
-                    raise ValueError(f"{key} 必须是 1 到 65535 之间的端口")
+                    raise ValueError(f"{key} must be between 1 and 65535")
+            if values.get("DECISION_MODE", "heuristic") not in {"heuristic", "model"}:
+                raise ValueError("DECISION_MODE must be heuristic or model")
+            if bool(values.get("SUPABASE_URL")) != bool(values.get("SUPABASE_SECRET_KEY")):
+                raise ValueError("SUPABASE_URL and SUPABASE_SECRET_KEY must be set together")
+            if values.get("SUPABASE_URL") and not values.get("BOT_QQ", "").isdigit():
+                raise ValueError("BOT_QQ is required when Supabase memory is enabled")
         except ValueError as exc:
             messagebox.showwarning("配置无效", str(exc), parent=self)
             return False

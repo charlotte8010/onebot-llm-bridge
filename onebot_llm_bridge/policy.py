@@ -20,6 +20,7 @@ def decide_reply(
     address_names: tuple[str, ...] = (),
     bot_qq: str = "",
     active_topic: bool = False,
+    decision_mode: str = "heuristic",
 ) -> ReplyDecision:
     if message.conversation_type == "private":
         return ReplyDecision(True, "private_message")
@@ -42,6 +43,8 @@ def decide_reply(
     if addressed:
         mode = "quote_reply" if message.reply_to else "reply"
         return ReplyDecision(True, "addressed", mode)
-    if group_mode == "smart" and active_topic:
-        return ReplyDecision(True, "active_topic")
+    if group_mode == "smart" and (active_topic or decision_mode == "model"):
+        reason = "active_topic" if active_topic else "model_decision_pending"
+        mode = "active_topic" if active_topic else "smart_decision"
+        return ReplyDecision(True, reason, mode)
     return ReplyDecision(False, "not_addressed", "ignore")

@@ -176,6 +176,8 @@ BOT_NAMES=bot,助手,你的机器人昵称
 
 `FOLLOWUP_SECONDS` 只影响 `GROUP_MODE=smart`：机器人回复后，在这个时间内可以继续当前话题而不必再次 @。`TYPING_STATUS=false` 会关闭私聊中的“正在输入”状态。
 
+`DECISION_MODE=heuristic` 是默认模式，只用本地规则判断群消息；设为 `model` 后，`GROUP_MODE=smart` 的白名单群会把未明确 @ 的消息交给模型做路由判断。模型只能返回 `reply`、`quote_reply`、`emoji_react` 或 `ignore`，不能直接修改配置，也不能凭空生成事实。模型决策失败时会忽略该条消息。
+
 如果配置了 `MEMORY_DB`，可以在私聊中发送 `记住：内容` 保存明确事实，发送
 `忘记：内容` 删除完全相同的事实。普通聊天不会自动写入事实，避免把玩笑误记成偏好。
 
@@ -468,8 +470,30 @@ conversation window, add:
 ```dotenv
 CONTEXT_MESSAGES=20
 MEMORY_DB=./.local/context.sqlite3
+DECISION_MODE=heuristic
 ```
 
 This is intentionally opt-in. The store keeps normalized message fields only,
 not complete raw OneBot events, tokens, or cookies. Remove `MEMORY_DB` when
 you want memory to stay process-local.
+
+## Cross-machine memory and summaries
+
+Run `supabase/migrations/202608150001_bridge_memory.sql` in a private
+Supabase project, then configure both computers with:
+
+```dotenv
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SECRET_KEY=sb_secret_...
+SUPABASE_TIMEOUT_SECONDS=10
+REMOTE_MEMORY_MODE=local_first
+SUMMARY_ENABLED=false
+SUMMARY_MIN_MESSAGES=40
+SUMMARY_DELAY_SECONDS=10
+```
+
+The bridge shares normalized messages, explicit facts, summaries, and remote
+smart-group settings. It writes messages idempotently. If the remote service
+is unavailable, local SQLite remains usable. Enable summaries only after the
+normal reply path works; they consume the configured model and are bounded to
+one summary plus forty short facts per run.

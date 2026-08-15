@@ -19,6 +19,30 @@ VISION_MAX_TOKENS=512
 VISION_TIMEOUT_SECONDS=30
 ```
 
+## Cross-machine memory
+
+The bridge can optionally share normalized messages, explicit facts, smart
+group settings, and model-written summaries through a private Supabase
+project. Run `supabase/migrations/202608150001_bridge_memory.sql` first, then
+configure both values:
+
+```dotenv
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SECRET_KEY=sb_secret_...
+SUPABASE_TIMEOUT_SECONDS=10
+REMOTE_MEMORY_MODE=local_first
+SUMMARY_ENABLED=false
+SUMMARY_MIN_MESSAGES=40
+SUMMARY_DELAY_SECONDS=10
+```
+
+`local_first` keeps the local SQLite path responsive and synchronizes remote
+memory best-effort. `coordinated` adds a short per-conversation lease so two
+machines do not answer the same conversation at once; if the remote store is
+unavailable, that batch fails closed instead of risking duplicate delivery.
+The secret key is never sent to the model or written to logs. The remote store
+is opt-in and no personal data is bundled.
+
 When the chat and vision models use the same provider, `VISION_API_KEY` and
 `VISION_BASE_URL` may be left empty; they inherit `LLM_API_KEY` and
 `LLM_BASE_URL`. Keep `VISION_MODEL` explicit so a text-only chat model is not
@@ -139,7 +163,7 @@ OneBot LLM Bridge 把这些问题拆成可配置模块，默认提供一套稳�
 - `control_panel.py`：可选的 Windows 控制台，管理配置和本地服务启动。
 - `tests/`：不依赖真实 QQ 和 API Key 的单元测试。
 
-当前版本已经可以跑通“私聊文本 -> 防抖合并 -> 模型 -> NapCat 发回”的基本链路，并支持 smart 群聊的基础话题相关性判断、引用回复、私聊输入状态、可选图片识别、显式事实记忆、可选表情回应、定时主动消息和 Windows 控制台。
+当前版本已经可以跑通“私聊文本 -> 防抖合并 -> 模型 -> NapCat 发回”的基本链路，并支持 smart 群聊的话题相关性判断、模型决策路由（回复/引用/表情/忽略）、私聊输入状态、可选图片识别、显式事实记忆、定时主动消息、跨电脑记忆和 Windows 控制台。
 
 在填写 `examples/.env.example` 的副本后，可以分别启动：
 
@@ -177,7 +201,7 @@ python -m unittest discover -s tests -q
 - 显式用户事实记忆；自动摘要仍在后续路线中。
 - 图片输入和 Base64 转换。
 - 模型预设与 `/models` 检测。
-- 可选的 Supabase 共享记忆仍未实现。
+- 可选的 Supabase 共享记忆、远端智能群白名单和自动摘要已经实现；默认关闭，启用前先执行迁移。
 - 可选表情回应、定时主动消息和受白名单约束的 `get_time` 工具调用。
 - 运行状态、日志和错误提示。
 

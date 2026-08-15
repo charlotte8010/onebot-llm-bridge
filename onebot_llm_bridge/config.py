@@ -105,6 +105,7 @@ class Settings:
     bot_qq: str = ""
     bot_names: tuple[str, ...] = ()
     group_mode: str = "mention"
+    decision_mode: str = "heuristic"
     group_allowlist: frozenset[str] = frozenset()
     debounce_seconds: float = 3.0
     debounce_random: bool = False
@@ -121,18 +122,31 @@ class Settings:
     context_messages: int = 20
     persona_file: str = ""
     memory_db: str = ""
+    supabase_url: str = ""
+    supabase_key: str = ""
+    supabase_timeout_seconds: float = 10.0
+    remote_memory_mode: str = "local_first"
+    summary_enabled: bool = False
+    summary_min_messages: int = 40
+    summary_delay_seconds: float = 10.0
 
     @classmethod
     def from_values(cls, values: Mapping[str, str]) -> "Settings":
         group_mode = _text(values, "GROUP_MODE", "mention").lower()
         if group_mode not in {"mention", "smart", "all", "off"}:
             raise ConfigError("GROUP_MODE must be mention, smart, all, or off")
+        decision_mode = _text(values, "DECISION_MODE", "heuristic").lower()
+        if decision_mode not in {"heuristic", "model"}:
+            raise ConfigError("DECISION_MODE must be heuristic or model")
         reaction_mode = _text(values, "REACTION_MODE", "off").lower()
         if reaction_mode not in {"off", "like"}:
             raise ConfigError("REACTION_MODE must be off or like")
         active_target_type = _text(values, "ACTIVE_TARGET_TYPE", "private").lower()
         if active_target_type not in {"private", "group"}:
             raise ConfigError("ACTIVE_TARGET_TYPE must be private or group")
+        remote_memory_mode = _text(values, "REMOTE_MEMORY_MODE", "local_first").lower()
+        if remote_memory_mode not in {"local_first", "coordinated"}:
+            raise ConfigError("REMOTE_MEMORY_MODE must be local_first or coordinated")
         vision_mode = _text(values, "VISION_MODE", "off").lower()
         if vision_mode not in {"off", "direct", "separate"}:
             raise ConfigError("VISION_MODE must be off, direct, or separate")
@@ -160,6 +174,8 @@ class Settings:
         )
         llm_api_key = _text(values, "LLM_API_KEY")
         llm_base_url = _text(values, "LLM_BASE_URL").rstrip("/")
+        supabase_url = _text(values, "SUPABASE_URL").rstrip("/")
+        supabase_key = _text(values, "SUPABASE_SECRET_KEY") or _text(values, "SUPABASE_KEY")
         vision_api_key = _text(values, "VISION_API_KEY") or llm_api_key
         vision_base_url = _text(values, "VISION_BASE_URL").rstrip("/") or llm_base_url
         return cls(
@@ -185,6 +201,7 @@ class Settings:
             bot_qq=bot_qq,
             bot_names=bot_names,
             group_mode=group_mode,
+            decision_mode=decision_mode,
             group_allowlist=allowlist,
             debounce_seconds=debounce_seconds,
             debounce_random=debounce_random,
@@ -202,6 +219,13 @@ class Settings:
             context_messages=_int(values, "CONTEXT_MESSAGES", 20, 0, 100),
             persona_file=_text(values, "PERSONA_FILE"),
             memory_db=_text(values, "MEMORY_DB"),
+            supabase_url=supabase_url,
+            supabase_key=supabase_key,
+            supabase_timeout_seconds=_float(values, "SUPABASE_TIMEOUT_SECONDS", 10.0, 1.0, 120.0),
+            remote_memory_mode=remote_memory_mode,
+            summary_enabled=_text(values, "SUMMARY_ENABLED", "false").lower() in {"1", "true", "yes", "on"},
+            summary_min_messages=_int(values, "SUMMARY_MIN_MESSAGES", 40, 10, 1000),
+            summary_delay_seconds=_float(values, "SUMMARY_DELAY_SECONDS", 10.0, 0.0, 300.0),
         )
 
     def validate_for_bot(self) -> None:
@@ -236,6 +260,12 @@ class Settings:
             raise ConfigError("ACTIVE_TARGET_ID and ACTIVE_PROMPT are required when ACTIVE_ENABLED is true")
         if self.active_enabled and not self.active_target_id.isdigit():
             raise ConfigError("ACTIVE_TARGET_ID must be a numeric QQ or group id")
+        if bool(self.supabase_url) != bool(self.supabase_key):
+            raise ConfigError("SUPABASE_URL and SUPABASE_SECRET_KEY must be set together")
+        if self.supabase_url and not self.supabase_url.startswith("https://"):
+            raise ConfigError("SUPABASE_URL must use HTTPS")
+        if self.supabase_url and not self.bot_qq:
+            raise ConfigError("BOT_QQ is required when Supabase remote memory is enabled")
 
     def debounce_delay(self) -> float:
         if self.debounce_random:

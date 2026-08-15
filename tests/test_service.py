@@ -110,3 +110,37 @@ class BotServiceVisionTests(unittest.TestCase):
         result = BotService(settings, provider=chat).reply({"message": "现在几点", "context": []})
         self.assertEqual(result["bubbles"], ["工具结果已收到"])
         self.assertEqual(len(chat.calls), 2)
+
+    def test_summary_endpoint_shape_is_bounded(self):
+        chat = FakeProvider('{"summary":"short","facts":["likes books"]}')
+        service = BotService(self.settings("off"), provider=chat)
+        result = service.summarize({"context": [{"text": "hello"}]})
+        self.assertEqual(result, {"summary": "short", "facts": ["likes books"]})
+
+    def test_summary_rejects_non_json_model_output(self):
+        service = BotService(self.settings("off"), provider=FakeProvider("not json"))
+        with self.assertRaises(ProviderError):
+            service.summarize({"context": [{"text": "hello"}]})
+
+    def test_decision_endpoint_returns_valid_routing_action(self):
+        chat = FakeProvider('{"action":"quote_reply","target_message_id":"2","emoji_id":"","reason":"direct follow-up"}')
+        service = BotService(self.settings("off"), provider=chat)
+        result = service.decide(
+            {
+                "conversation": "private:123",
+                "message": "继续刚才那个",
+                "context": [{"message_id": "1", "text": "刚才的话题"}],
+                "target_message_ids": ["2"],
+                "allow_reactions": False,
+            }
+        )
+        self.assertEqual(result["action"], "quote_reply")
+        self.assertEqual(result["target_message_id"], "2")
+
+    def test_decision_rejects_invalid_target(self):
+        service = BotService(
+            self.settings("off"),
+            provider=FakeProvider('{"action":"reply","target_message_id":"999"}'),
+        )
+        with self.assertRaises(ProviderError):
+            service.decide({"message": "hello", "context": [], "target_message_ids": ["1"]})

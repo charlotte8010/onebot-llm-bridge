@@ -123,3 +123,32 @@ class ConfigTests(unittest.TestCase):
     def test_tool_allowlist_is_normalized(self) -> None:
         settings = Settings.from_values({"TOOL_ALLOWLIST": " get_time, Safe "})
         self.assertEqual(settings.tool_allowlist, ("get_time", "safe"))
+
+    def test_remote_memory_and_summary_settings_are_loaded(self) -> None:
+        settings = Settings.from_values(
+            {
+                "BOT_QQ": "100",
+                "SUPABASE_URL": "https://project.supabase.co",
+                "SUPABASE_SECRET_KEY": "sb_secret_test",
+                "REMOTE_MEMORY_MODE": "local_first",
+                "SUMMARY_ENABLED": "true",
+                "SUMMARY_MIN_MESSAGES": "50",
+                "SUMMARY_DELAY_SECONDS": "5",
+            }
+        )
+        settings.validate_for_bridge()
+        self.assertEqual(settings.supabase_url, "https://project.supabase.co")
+        self.assertTrue(settings.summary_enabled)
+        self.assertEqual(settings.summary_min_messages, 50)
+
+    def test_remote_memory_requires_paired_credentials_and_bot_id(self) -> None:
+        with self.assertRaises(ConfigError):
+            Settings.from_values({"SUPABASE_URL": "https://project.supabase.co"}).validate_for_bridge()
+        settings = Settings.from_values(
+            {
+                "SUPABASE_URL": "https://project.supabase.co",
+                "SUPABASE_SECRET_KEY": "sb_secret_test",
+            }
+        )
+        with self.assertRaises(ConfigError):
+            settings.validate_for_bridge()

@@ -64,3 +64,13 @@ class FormattingAndPolicyTests(unittest.TestCase):
             active_topic=True,
         )
         self.assertEqual(continuation.reason, "active_topic")
+
+    def test_model_decision_mode_accepts_unaddressed_smart_group_message(self) -> None:
+        decision = decide_reply(
+            message(kind="group", group_id="999"),
+            group_mode="smart",
+            group_allowlist=frozenset({"999"}),
+            decision_mode="model",
+        )
+        self.assertTrue(decision.should_reply)
+        self.assertEqual(decision.mode, "smart_decision")

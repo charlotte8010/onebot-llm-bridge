@@ -278,3 +278,70 @@ class BridgeTests(unittest.TestCase):
         )
         self.assertTrue(result["handled"])
         self.assertEqual(napcat.reactions, [("9", "128077")])
+
+    def test_model_decision_can_ignore_an_unaddressed_smart_group_message(self):
+        settings = Settings.from_values(
+            {
+                "LLM_API_KEY": "key",
+                "LLM_BASE_URL": "https://example.test/v1",
+                "LLM_MODEL": "chat",
+                "GROUP_MODE": "smart",
+                "DECISION_MODE": "model",
+                "GROUP_ALLOWLIST": "999",
+            }
+        )
+        napcat = FakeNapCat()
+        bridge = Bridge(
+            settings,
+            napcat=napcat,
+            bot_request=lambda _payload: {"bubbles": ["should not be called"]},
+            decision_request=lambda _payload: {"action": "ignore", "reason": "unrelated"},
+        )
+        result = bridge.handle_event(
+            {
+                "post_type": "message",
+                "message_type": "group",
+                "group_id": 999,
+                "user_id": 123,
+                "message_id": 10,
+                "message": "群里正在聊别的事情",
+            }
+        )
+        self.assertFalse(result["handled"])
+        self.assertEqual(result["reason"], "model_decision_ignore")
+        self.assertEqual(napcat.sent, [])
+
+    def test_model_decision_can_quote_reply(self):
+        settings = Settings.from_values(
+            {
+                "LLM_API_KEY": "key",
+                "LLM_BASE_URL": "https://example.test/v1",
+                "LLM_MODEL": "chat",
+                "GROUP_MODE": "smart",
+                "DECISION_MODE": "model",
+                "GROUP_ALLOWLIST": "999",
+            }
+        )
+        napcat = FakeNapCat()
+        bridge = Bridge(
+            settings,
+            napcat=napcat,
+            bot_request=lambda _payload: {"bubbles": ["回复"]},
+            decision_request=lambda _payload: {
+                "action": "quote_reply",
+                "target_message_id": "11",
+                "reason": "引用当前消息",
+            },
+        )
+        result = bridge.handle_event(
+            {
+                "post_type": "message",
+                "message_type": "group",
+                "group_id": 999,
+                "user_id": 123,
+                "message_id": 11,
+                "message": "这个可以聊吗",
+            }
+        )
+        self.assertTrue(result["handled"])
+        self.assertEqual(napcat.quoted, [("group", "999", "11")])
