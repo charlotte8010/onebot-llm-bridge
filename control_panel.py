@@ -1110,7 +1110,7 @@ class ControlPanel(tk.Tk):
         self.typing = tk.BooleanVar(value=self._value("TYPING_STATUS", "true").lower() in {"1", "true", "yes", "on"})
         self._checkbutton(behavior, 6, 0, "显示输入状态", self.typing)
         self.tools_enabled = tk.BooleanVar(value=self._value("TOOLS_ENABLED", "false").lower() in {"1", "true", "yes", "on"})
-        self._tool_selector(behavior, 7, 2)
+        self._tool_selector(behavior, 7, 0)
         self.active_interval = self._entry(behavior, 8, "主动消息间隔(分钟)", "ACTIVE_INTERVAL_MINUTES", "60")
         self.active_private_enabled = tk.BooleanVar(
             value=self._active_value("ACTIVE_PRIVATE_ENABLED", "ACTIVE_ENABLED", "private", "false").lower()
@@ -1353,7 +1353,7 @@ class ControlPanel(tk.Tk):
     def _tool_selector(self, parent: ttk.Frame, row: int, column: int) -> None:
         """Render known safe tools as checkboxes and keep the env format stable."""
         holder = ttk.Frame(parent, style="Surface.TFrame")
-        holder.grid(row=row, column=column, columnspan=4, sticky="ew", pady=4)
+        holder.grid(row=row, column=column, columnspan=6, sticky="ew", pady=4)
         ttk.Checkbutton(holder, text="启用白名单工具", variable=self.tools_enabled).pack(side="left")
         badge = HelpBadge(holder, self, HELP_TEXTS["TOOLS_ENABLED"])
         badge.pack(side="left", padx=(4, 10))
