@@ -7,9 +7,17 @@ import time
 import unittest
 from email.message import Message
 from pathlib import Path
+from types import SimpleNamespace
 
 from onebot_llm_bridge.config import Settings
-from onebot_llm_bridge.services import Bridge, JsonHandler, _event_auth_matches, _related_topic
+from onebot_llm_bridge.models import NormalizedMessage
+from onebot_llm_bridge.services import (
+    Bridge,
+    JsonHandler,
+    _event_auth_matches,
+    _merge_context_messages,
+    _related_topic,
+)
 
 
 class FakeNapCat:
@@ -45,6 +53,42 @@ class FakeImageResolver:
 
 
 class BridgeTests(unittest.TestCase):
+    def test_remote_and_local_context_are_merged_without_duplicate_turns(self):
+        def message(message_id, text):
+            return NormalizedMessage(
+                event_id=f"event-{message_id}",
+                timestamp=int(message_id),
+                conversation_type="private",
+                conversation_id="123",
+                sender_id="123",
+                sender_name="friend",
+                message_id=str(message_id),
+                text=text,
+            )
+
+        merged = _merge_context_messages(
+            [message(1, "远程旧话题"), message(2, "远程重复")],
+            [message(2, "本地重复"), message(3, "刚刚收到")],
+            10,
+        )
+        self.assertEqual([item.text for item in merged], ["远程旧话题", "远程重复", "刚刚收到"])
+
+    def test_context_merge_keeps_only_latest_limit(self):
+        messages = [
+            NormalizedMessage(
+                event_id=f"event-{index}",
+                timestamp=index,
+                conversation_type="private",
+                conversation_id="123",
+                sender_id="123",
+                sender_name="friend",
+                message_id=str(index),
+                text=str(index),
+            )
+            for index in range(5)
+        ]
+        self.assertEqual([item.text for item in _merge_context_messages(messages, [], 2)], ["3", "4"])
+
     def test_json_handler_decodes_chunked_request_body(self):
         body = b'{"post_type":"message"}'
         encoded = f"{len(body):X}".encode() + b"\r\n" + body + b"\r\n0\r\n\r\n"
@@ -167,6 +211,34 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(result["reason"], "not_addressed")
         self.assertEqual(napcat.sent, [])
 
+    def test_bot_own_message_is_ignored(self):
+        settings = Settings.from_values(
+            {
+                "LLM_API_KEY": "key",
+                "LLM_BASE_URL": "https://example.test/v1",
+                "LLM_MODEL": "chat",
+                "BOT_QQ": "100",
+            }
+        )
+        napcat = FakeNapCat()
+        calls = []
+        bridge = Bridge(settings, napcat=napcat, bot_request=lambda payload: calls.append(payload))
+        result = bridge.handle_event(
+            {
+                "post_type": "message",
+                "message_type": "private",
+                "self_id": 100,
+                "user_id": 100,
+                "message_id": 101,
+                "message": "这是机器人自己发的",
+            }
+        )
+        bridge.shutdown()
+        self.assertFalse(result["handled"])
+        self.assertEqual(result["reason"], "self_message")
+        self.assertEqual(calls, [])
+        self.assertEqual(napcat.sent, [])
+
     def test_private_messages_are_merged_during_debounce_window(self):
         settings = Settings.from_values(
             {
@@ -200,6 +272,89 @@ class BridgeTests(unittest.TestCase):
         bridge.shutdown()
         self.assertEqual(calls[0]["message"], "第一句\n第二句")
         self.assertEqual(napcat.sent, [("private", "123", "合并回复")])
+
+    def test_duplicate_onebot_event_is_ignored(self):
+        settings = Settings.from_values(
+            {
+                "LLM_API_KEY": "key",
+                "LLM_BASE_URL": "https://example.test/v1",
+                "LLM_MODEL": "chat",
+                "DEBOUNCE_SECONDS": "0.01",
+            }
+        )
+        napcat = FakeNapCat()
+        calls = []
+        done = threading.Event()
+
+        def bot_request(payload):
+            calls.append(payload)
+            done.set()
+            return {"bubbles": ["只回一次"]}
+
+        bridge = Bridge(settings, napcat=napcat, bot_request=bot_request)
+        event = {
+            "post_type": "message",
+            "message_type": "private",
+            "user_id": 123,
+            "message_id": 77,
+            "message": "重复上报",
+        }
+        self.assertTrue(bridge.enqueue_event(event)["accepted"])
+        duplicate = bridge.enqueue_event(event)
+        self.assertFalse(duplicate["accepted"])
+        self.assertEqual(duplicate["reason"], "duplicate_event")
+        self.assertTrue(done.wait(1.0))
+        bridge.shutdown()
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(napcat.sent, [("private", "123", "只回一次")])
+
+    def test_failed_coordinated_batch_releases_remote_lease(self):
+        class FakeLeaseMemory:
+            def __init__(self):
+                self.released = []
+
+            def ingest(self, _message):
+                return True
+
+            def claim_conversation(self, *_args):
+                return True
+
+            def release_conversation(self, conversation_key, owner_id):
+                self.released.append((conversation_key, owner_id))
+
+            def load_context(self, _conversation_key, _limit):
+                return SimpleNamespace(messages=(), summary="", facts=())
+
+            def load_facts(self, _scope_key):
+                return []
+
+        settings = Settings.from_values(
+            {
+                "LLM_API_KEY": "key",
+                "LLM_BASE_URL": "https://example.test/v1",
+                "LLM_MODEL": "chat",
+                "REMOTE_MEMORY_MODE": "coordinated",
+            }
+        )
+        remote = FakeLeaseMemory()
+        bridge = Bridge(
+            settings,
+            napcat=FakeNapCat(),
+            remote_memory=remote,
+            bot_request=lambda _payload: (_ for _ in ()).throw(RuntimeError("model unavailable")),
+        )
+        with self.assertRaises(RuntimeError):
+            bridge.handle_event(
+                {
+                    "post_type": "message",
+                    "message_type": "private",
+                    "user_id": 123,
+                    "message_id": 78,
+                    "message": "请求失败",
+                }
+            )
+        bridge.shutdown()
+        self.assertTrue(remote.released)
 
     def test_group_smart_mode_continues_after_a_reply(self):
         settings = Settings.from_values(

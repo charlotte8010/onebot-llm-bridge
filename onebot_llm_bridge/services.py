@@ -8,7 +8,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -56,6 +56,26 @@ def _related_topic(current: str, previous: str) -> bool:
     current_terms = _topic_terms(current)
     previous_terms = _topic_terms(previous)
     return bool(current_terms and previous_terms and current_terms & previous_terms)
+
+
+def _merge_context_messages(
+    primary: list[NormalizedMessage],
+    secondary: list[NormalizedMessage],
+    limit: int,
+) -> list[NormalizedMessage]:
+    """Merge remote history with local recent messages without duplicating turns."""
+    if limit <= 0:
+        return []
+    merged: list[NormalizedMessage] = []
+    seen: set[str] = set()
+    for message in [*primary, *secondary]:
+        identity = message.message_id or message.event_id
+        if identity in seen:
+            continue
+        seen.add(identity)
+        merged.append(message)
+    merged.sort(key=lambda item: (item.timestamp, item.event_id))
+    return merged[-limit:]
 
 
 class PendingBatch:
@@ -217,8 +237,8 @@ class BotService:
             "Use [[BUBBLE]] between separate QQ bubbles when useful. Choose bubble count from the topic and "
             "A plain line break is not a bubble marker; use [[BUBBLE]] only when a separate message is intentional. "
             "the number of natural thoughts: one is common for a flat/simple reply, two for two separate thoughts, "
-            "three or four are more natural for a work or life complaint, making process, or engaged game/work discussion, "
-            "and five or more is only for a genuinely flowing multi-part message. Never force a fixed count. "
+            "three or four are more natural for a work or life complaint, making process, or engaged game/work discussion. "
+            "Never force a fixed count. "
             "Never use a fixed bubble or punctuation template. Do not add exclamation marks or parentheses "
             "unless the current emotion clearly calls for them. In particular, do not make the first bubble "
             "end with repeated exclamation marks and the second bubble end with parentheses. "
@@ -453,6 +473,10 @@ class BotServiceHandler(JsonHandler):
         except (ValueError, ProviderError) as exc:
             self.write_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
             return
+        except Exception as exc:
+            print(f"[bot] request failed path={self.path}: {type(exc).__name__}: {exc}")
+            self.write_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": "internal_error"})
+            return
         self.write_json(HTTPStatus.OK, result)
 
 
@@ -486,6 +510,8 @@ class Bridge:
     MAX_BATCH_WINDOW_SECONDS = 12.0
     MAX_BATCH_MESSAGES = 20
     REMOTE_CACHE_SECONDS = 8.0
+    EVENT_DEDUPE_SECONDS = 300.0
+    MAX_SEEN_EVENTS = 4096
     def __init__(
         self,
         settings: Settings,
@@ -541,6 +567,7 @@ class Bridge:
         self._loaded_contexts: set[str] = set()
         self._active_timers: dict[str, threading.Timer] = {}
         self._summary_timers: dict[str, threading.Timer] = {}
+        self._seen_events: OrderedDict[str, float] = OrderedDict()
         self._metrics_lock = threading.Lock()
         self._metrics: dict[str, int | float] = {
             "events_received": 0,
@@ -590,6 +617,37 @@ class Bridge:
     def metrics(self) -> dict[str, int | float]:
         with self._metrics_lock:
             return dict(self._metrics)
+
+    def _is_duplicate_event(self, message: NormalizedMessage) -> bool:
+        """Ignore short-lived OneBot retries so one QQ message gets one reply."""
+        if not message.message_id:
+            return False
+        key = f"{message.conversation_key}:{message.message_id}"
+        now = time.monotonic()
+        with self._state_lock:
+            while self._seen_events:
+                oldest_key, seen_at = next(iter(self._seen_events.items()))
+                if now - seen_at < self.EVENT_DEDUPE_SECONDS:
+                    break
+                self._seen_events.pop(oldest_key, None)
+            seen_at = self._seen_events.get(key)
+            if seen_at is not None and now - seen_at < self.EVENT_DEDUPE_SECONDS:
+                self._seen_events.move_to_end(key)
+                return True
+            self._seen_events[key] = now
+            self._seen_events.move_to_end(key)
+            while len(self._seen_events) > self.MAX_SEEN_EVENTS:
+                self._seen_events.popitem(last=False)
+        return False
+
+    def _release_remote_lease_after_error(self, conversation_key: str) -> None:
+        """Best-effort cleanup for exceptions that escape the batch worker."""
+        if self.settings.remote_memory_mode != "coordinated" or self.remote_memory is None:
+            return
+        try:
+            self.remote_memory.release_conversation(conversation_key, self._worker_id)
+        except RemoteMemoryError as exc:
+            print(f"remote coordination emergency release failed: {exc.code}")
 
     def _context_for(self, key: str) -> deque[NormalizedMessage]:
         context = self._contexts[key]
@@ -705,6 +763,9 @@ class Bridge:
             return
         try:
             self.remote_memory.ingest(message)
+            with self._remote_cache_lock:
+                self._remote_context_cache.pop(message.conversation_key, None)
+                self._remote_facts_cache.pop(f"conversation:{message.conversation_key}", None)
         except RemoteMemoryError as exc:
             print(f"remote memory ingest failed: {exc.code}: {exc}")
 
@@ -806,9 +867,14 @@ class Bridge:
                         max(self.settings.context_messages, len(context), 1),
                     )
                     current_ids = {item.message_id for item in messages}
-                    model_context = [
+                    remote_messages = [
                         item for item in remote_context.messages if item.message_id not in current_ids
                     ]
+                    model_context = _merge_context_messages(
+                        remote_messages,
+                        list(context),
+                        self.settings.context_messages,
+                    )
                     summary = remote_context.summary
                     remote_facts.extend(self._cached_remote_facts(f"user:{first.sender_id}"))
                     remote_facts.extend(str(item) for item in remote_context.facts)
@@ -1009,9 +1075,10 @@ class Bridge:
             bubbles = result.get("bubbles")
             if not isinstance(bubbles, list):
                 bubbles = split_bubbles(str(result.get("reply", "")))
-            for bubble in (str(item).strip() for item in bubbles):
-                if not bubble:
-                    continue
+            bubbles, quality_warnings = sanitize_bubbles(bubbles)
+            if quality_warnings:
+                print(f"active message quality adjusted: {','.join(quality_warnings)}")
+            for bubble in bubbles:
                 for target in target_ids:
                     if target_type == "group":
                         self.napcat.send_group(target, bubble)
@@ -1025,6 +1092,10 @@ class Bridge:
 
     def handle_event(self, event: Mapping[str, Any]) -> dict[str, Any]:
         message = NormalizedMessage.from_onebot(event)
+        if self._is_duplicate_event(message):
+            self._metric("events_ignored")
+            return {"handled": False, "reason": "duplicate_event"}
+        self._metric("events_received")
         self._ingest_remote(message)
         decision = self._decision(message)
         if not is_meaningful(message) or not decision.should_reply:
@@ -1034,12 +1105,16 @@ class Bridge:
             return memory_result
         with self._state_lock:
             context = self._record_message(message)
-        result = self._process_batch(
-            [message],
-            context,
-            decision.mode,
-            message.reply_to if decision.mode == "quote_reply" else None,
-        )
+        try:
+            result = self._process_batch(
+                [message],
+                context,
+                decision.mode,
+                message.reply_to if decision.mode == "quote_reply" else None,
+            )
+        except Exception:
+            self._release_remote_lease_after_error(message.conversation_key)
+            raise
         result.setdefault("reason", decision.reason)
         return result
 
@@ -1047,6 +1122,9 @@ class Bridge:
         """Accept an event quickly and process it after the debounce window."""
         message = NormalizedMessage.from_onebot(event)
         self._metric("events_received")
+        if self._is_duplicate_event(message):
+            self._metric("events_ignored")
+            return {"accepted": False, "reason": "duplicate_event"}
         self._ingest_remote(message)
         decision = self._decision(message)
         if not is_meaningful(message) or not decision.should_reply:
@@ -1098,8 +1176,14 @@ class Bridge:
             self._process_batch(batch.messages, batch.context, batch.mode, batch.reply_to)
             self._metric("batches_processed")
         except Exception as exc:
+            self._release_remote_lease_after_error(batch.messages[0].conversation_key)
             self._metric("batch_failures")
-            print(f"background batch failed: {type(exc).__name__}: {exc}")
+            print(
+                "background batch failed: "
+                f"conversation={batch.messages[0].conversation_key} "
+                f"messages={len(batch.messages)} "
+                f"error={type(exc).__name__}: {exc}"
+            )
 
     def shutdown(self) -> None:
         self._shutdown = True
@@ -1169,6 +1253,11 @@ class BridgeHandler(JsonHandler):
         except (NapCatError, RuntimeError) as exc:
             self.write_json(HTTPStatus.OK, {"ok": False, "error": str(exc)})
             return
+        except Exception as exc:
+            print(f"[bridge] event processing failed: {type(exc).__name__}: {exc}")
+            # NapCat should not retry indefinitely because of a local bug.
+            self.write_json(HTTPStatus.OK, {"ok": False, "error": "bridge_internal_error"})
+            return
         self.write_json(HTTPStatus.OK, result)
 
 
@@ -1186,7 +1275,12 @@ def serve_bot(settings: Settings) -> None:
         settings.bot_service_token,
     )
     print(f"Bot service listening on http://{settings.bot_service_host}:{settings.bot_service_port}")
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("Bot service stopping")
+    finally:
+        server.server_close()
 
 
 def serve_bridge(settings: Settings) -> None:
@@ -1196,4 +1290,10 @@ def serve_bridge(settings: Settings) -> None:
         settings.napcat_event_token,
     )
     print(f"Bridge listening on http://{settings.bridge_host}:{settings.bridge_port}/onebot")
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("Bridge stopping")
+    finally:
+        server.server_close()
+        server.bridge.shutdown()

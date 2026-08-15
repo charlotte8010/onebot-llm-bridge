@@ -22,6 +22,8 @@ def decide_reply(
     active_topic: bool = False,
     decision_mode: str = "heuristic",
 ) -> ReplyDecision:
+    if message.is_self or (bot_qq and message.sender_id == bot_qq):
+        return ReplyDecision(False, "self_message", "ignore")
     if message.conversation_type == "private":
         return ReplyDecision(True, "private_message")
     if message.conversation_id not in group_allowlist:
