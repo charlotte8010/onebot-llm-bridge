@@ -1,9 +1,10 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from control_panel import HELP_SECTIONS, OPTION_LABELS, ControlPanel, local_url_port, load_env_file, load_theme, parse_port, parse_model_ids, probe_models, save_env_file, save_theme
+from control_panel import HELP_SECTIONS, OPTION_LABELS, ControlPanel, build_napcat_command, local_url_port, load_env_file, load_theme, parse_port, parse_model_ids, probe_models, save_env_file, save_theme
 
 
 class ControlPanelHelperTests(unittest.TestCase):
@@ -34,6 +35,18 @@ class ControlPanelHelperTests(unittest.TestCase):
         self.assertEqual(local_url_port("http://localhost/api", 3000), 3000)
         self.assertIsNone(local_url_port("https://remote.example/api", 443))
         self.assertIsNone(local_url_port("not a url", 3000))
+
+    def test_napcat_launcher_can_find_qq_itself(self):
+        self.assertEqual(
+            build_napcat_command("E:/Napcat/NapCat.Shell/launcher.bat"),
+            [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", 'call "E:\\Napcat\\NapCat.Shell\\launcher.bat"'],
+        )
+
+    def test_napcat_boot_exe_keeps_explicit_qq_and_hook(self):
+        self.assertEqual(
+            build_napcat_command("E:/Napcat/NapCat.Shell/NapCatWinBootMain.exe", "E:/QQNT/QQ.exe", "E:/Napcat/NapCat.Shell/NapCatWinBootHook.dll"),
+            ["E:\\Napcat\\NapCat.Shell\\NapCatWinBootMain.exe", "E:/QQNT/QQ.exe", "E:/Napcat/NapCat.Shell/NapCatWinBootHook.dll"],
+        )
 
     def test_theme_defaults_to_morandi_and_round_trips(self):
         with tempfile.TemporaryDirectory() as directory:

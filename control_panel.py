@@ -80,7 +80,7 @@ HELP_TEXTS: dict[str, str] = {
     "BOT_SERVICE_TOKEN": "Bridge 调用本地 Bot 服务时使用的 Token，必须和 Bot 服务的配置一致。",
     "BRIDGE_PORT": "Bridge 接收 NapCat 事件的端口，默认 8766。",
     "BOT_SERVICE_PORT": "Bot 服务提供模型回复的端口，默认 8765。",
-    "NAPCAT_BOOT": "NapCatWinBootMain.exe 的路径，用于一键启动 NapCat。",
+    "NAPCAT_BOOT": "NapCat 启动程序路径。填写 launcher.bat 时会由 NapCat 自动查找 QQ；填写 NapCatWinBootMain.exe 时才需要另外填写 QQ 和 Hook。",
     "NAPCAT_QQ": "QQ.exe 的路径。要和 NapCat 使用的 QQNT 安装保持一致。",
     "NAPCAT_HOOK": "NapCatWinBootHook.dll 的路径，用于注入 NapCat。",
     "SUPABASE_URL": "Supabase 项目 URL，例如 https://xxxx.supabase.co。只填写项目地址，不要填 /rest/v1。",
@@ -340,6 +340,15 @@ def probe_napcat(base_url: str, access_token: str = "") -> str:
     if payload.get("status") == "failed" or payload.get("retcode", 0) not in {0, None}:
         raise ValueError("NapCat 拒绝了 get_status 请求")
     return "NapCat API 可用"
+
+
+def build_napcat_command(boot: str, qq: str = "", hook: str = "") -> list[str]:
+    """Build a Windows NapCat command for either a launcher script or boot exe."""
+    boot_path = Path(boot)
+    if boot_path.suffix.lower() in {".bat", ".cmd"}:
+        command_shell = os.environ.get("COMSPEC", "cmd.exe")
+        return [command_shell, "/d", "/c", f'call "{boot_path}"']
+    return [str(boot_path), qq, hook]
 
 
 class ServiceProcess:
@@ -1757,11 +1766,16 @@ class ControlPanel(tk.Tk):
             self._append_log("NapCat 已经由本控制台启动")
             return
 
-        paths = [self.napcat_boot.get().strip(), self.napcat_qq.get().strip(), self.napcat_hook.get().strip()]
+        boot = self.napcat_boot.get().strip()
+        qq = self.napcat_qq.get().strip()
+        hook = self.napcat_hook.get().strip()
+        launcher_mode = Path(boot).suffix.lower() in {".bat", ".cmd"}
+        paths = [boot] if launcher_mode else [boot, qq, hook]
         if not all(paths):
             messagebox.showwarning(
                 "NapCat 路径未配置",
                 "请先填写 NapCat 启动程序、QQ 程序和 Hook 路径。\n"
+                "如果填写的是 launcher.bat，只需要填写 NapCat 启动程序。\n"
                 "也可以直接在配置文件中填写 NAPCAT_BOOT、NAPCAT_QQ、NAPCAT_HOOK。",
                 parent=self,
             )
@@ -1774,17 +1788,18 @@ class ControlPanel(tk.Tk):
                 parent=self,
             )
             return
-        boot, qq, hook = (Path(path) for path in paths)
+        boot_path = Path(boot)
+        command = build_napcat_command(boot, qq, hook)
         try:
             self.napcat_process = subprocess.Popen(
-                [str(boot), str(qq), str(hook)],
-                cwd=boot.parent,
+                command,
+                cwd=boot_path.parent,
                 creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
             )
         except OSError as exc:
             messagebox.showerror("NapCat 启动失败", str(exc), parent=self)
             return
-        self._append_log(f"已启动 NapCat：{boot}")
+        self._append_log(f"已启动 NapCat：{boot_path}")
 
     def run_diagnostics(self) -> None:
         if self.diagnostics_button.instate(["disabled"]):
