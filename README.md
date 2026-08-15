@@ -19,6 +19,11 @@ VISION_MAX_TOKENS=512
 VISION_TIMEOUT_SECONDS=30
 ```
 
+When the chat and vision models use the same provider, `VISION_API_KEY` and
+`VISION_BASE_URL` may be left empty; they inherit `LLM_API_KEY` and
+`LLM_BASE_URL`. Keep `VISION_MODEL` explicit so a text-only chat model is not
+accidentally used for image input.
+
 `separate` is the recommended mode for a text-only chat model such as a
 DeepSeek text endpoint. It makes two requests only when a message contains an
 image. If an image cannot be downloaded or decoded, the bridge logs a short

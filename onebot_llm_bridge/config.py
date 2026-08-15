@@ -140,15 +140,19 @@ class Settings:
             if debounce_random
             else _float(values, "DEBOUNCE_SECONDS", 3.0, 0.0, 60.0)
         )
+        llm_api_key = _text(values, "LLM_API_KEY")
+        llm_base_url = _text(values, "LLM_BASE_URL").rstrip("/")
+        vision_api_key = _text(values, "VISION_API_KEY") or llm_api_key
+        vision_base_url = _text(values, "VISION_BASE_URL").rstrip("/") or llm_base_url
         return cls(
-            llm_api_key=_text(values, "LLM_API_KEY"),
-            llm_base_url=_text(values, "LLM_BASE_URL").rstrip("/"),
+            llm_api_key=llm_api_key,
+            llm_base_url=llm_base_url,
             llm_model=_text(values, "LLM_MODEL"),
             llm_max_tokens=_int(values, "LLM_MAX_TOKENS", 1024, 1, 32768),
             llm_timeout_seconds=_float(values, "LLM_TIMEOUT_SECONDS", 60.0, 1.0, 600.0),
             vision_mode=vision_mode,
-            vision_api_key=_text(values, "VISION_API_KEY"),
-            vision_base_url=_text(values, "VISION_BASE_URL").rstrip("/"),
+            vision_api_key=vision_api_key,
+            vision_base_url=vision_base_url,
             vision_model=_text(values, "VISION_MODEL"),
             vision_max_tokens=_int(values, "VISION_MAX_TOKENS", 512, 1, 8192),
             vision_timeout_seconds=_float(values, "VISION_TIMEOUT_SECONDS", 30.0, 1.0, 600.0),

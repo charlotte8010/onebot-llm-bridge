@@ -388,6 +388,10 @@ VISION_MAX_TOKENS=512
 VISION_TIMEOUT_SECONDS=30
 ```
 
+If both models are hosted by the same service, leave `VISION_API_KEY` and
+`VISION_BASE_URL` empty. They inherit the corresponding `LLM_*` values. Keep
+`VISION_MODEL` set to the actual vision-capable model name.
+
 Use `direct` only when the main `LLM_MODEL` explicitly supports image input.
 Use `off` to disable image requests completely. In `separate` mode the vision
 model describes visible content first, and the main model receives that

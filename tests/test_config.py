@@ -69,3 +69,17 @@ class ConfigTests(unittest.TestCase):
     def test_invalid_vision_mode_is_rejected(self) -> None:
         with self.assertRaises(ConfigError):
             Settings.from_values({"VISION_MODE": "maybe"})
+
+    def test_vision_provider_can_reuse_main_api_credentials(self) -> None:
+        settings = Settings.from_values(
+            {
+                "LLM_API_KEY": "shared-key",
+                "LLM_BASE_URL": "https://shared.example/v1/",
+                "LLM_MODEL": "text-model",
+                "VISION_MODE": "separate",
+                "VISION_MODEL": "vision-model",
+            }
+        )
+        settings.validate_for_bot()
+        self.assertEqual(settings.vision_api_key, "shared-key")
+        self.assertEqual(settings.vision_base_url, "https://shared.example/v1")
