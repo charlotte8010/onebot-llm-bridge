@@ -779,15 +779,17 @@ class ControlPanel(tk.Tk):
             darkcolor=[("focus", colors["border"])],
         )
         style.map("TCombobox", fieldbackground=[("readonly", colors["input"])], foreground=[("readonly", colors["text"])])
-        style.configure("TButton", background=colors["surface"], foreground=colors["text"], bordercolor=colors["border"], lightcolor=colors["border"], darkcolor=colors["border"])
+        style.configure("TButton", background=colors["surface"], foreground=colors["text"], bordercolor=colors["surface"], lightcolor=colors["surface"], darkcolor=colors["surface"], borderwidth=0, relief="flat")
         style.map("TButton", background=[("active", colors["button_active"]), ("pressed", colors["button_pressed"])], foreground=[("disabled", colors["muted"])])
-        style.configure("Primary.TButton", background=colors["accent"], foreground=colors["background"], bordercolor=colors["accent"])
+        style.configure("Primary.TButton", background=colors["accent"], foreground=colors["background"], bordercolor=colors["accent"], lightcolor=colors["accent"], darkcolor=colors["accent"], borderwidth=0, relief="flat")
         style.map("Primary.TButton", background=[("active", colors["accent_active"]), ("pressed", colors["accent"])])
-        style.configure("Danger.TButton", background=colors["danger_soft"], foreground=colors["danger"], bordercolor=colors["danger_soft"])
+        style.configure("Danger.TButton", background=colors["danger_soft"], foreground=colors["danger"], bordercolor=colors["danger_soft"], lightcolor=colors["danger_soft"], darkcolor=colors["danger_soft"], borderwidth=0, relief="flat")
         style.map("Danger.TButton", background=[("active", colors["danger_active"]), ("pressed", colors["danger"])])
-        style.configure("TCheckbutton", background=colors["surface"], foreground=colors["text"])
-        style.map("TCheckbutton", background=[("active", colors["surface"])], foreground=[("active", colors["accent"])])
+        style.configure("TCheckbutton", background=colors["surface"], foreground=colors["text"], indicatorcolor=colors["input"], indicatormargin=(2, 2, 6, 2))
+        style.map("TCheckbutton", background=[("active", colors["surface"])], foreground=[("active", colors["accent"])], indicatorcolor=[("selected", colors["accent"]), ("pressed", colors["accent_active"]), ("active", colors["border"])])
+        style.configure("Horizontal.TProgressbar", troughcolor=colors["surface_alt"], background=colors["accent"], bordercolor=colors["surface_alt"], lightcolor=colors["accent"], darkcolor=colors["accent"], thickness=6)
         self._configure_notebook_style()
+        self._configure_flat_control_layouts(style)
         style.configure("Status.TLabel", background=colors["surface_alt"], foreground=colors["muted"])
         style.configure("StatusOnline.TLabel", background=colors["accent_soft"], foreground=colors["accent"])
         style.configure("StatusOffline.TLabel", background=colors["danger_soft"], foreground=colors["danger"])
@@ -875,6 +877,42 @@ class ControlPanel(tk.Tk):
             foreground=[("selected", colors["accent"])],
         )
 
+    @staticmethod
+    def _configure_flat_control_layouts(style: ttk.Style) -> None:
+        """Remove legacy focus frames while keeping keyboard focus functional."""
+        style.layout(
+            "TButton",
+            [
+                (
+                    "Button.border",
+                    {
+                        "sticky": "nswe",
+                        "children": [
+                            (
+                                "Button.padding",
+                                {"sticky": "nswe", "children": [("Button.label", {"sticky": "nswe"})]},
+                            )
+                        ],
+                    },
+                )
+            ],
+        )
+        style.layout(
+            "TCheckbutton",
+            [
+                (
+                    "Checkbutton.padding",
+                    {
+                        "sticky": "nswe",
+                        "children": [
+                            ("Checkbutton.indicator", {"side": "left", "sticky": ""}),
+                            ("Checkbutton.label", {"side": "left", "sticky": "nswe"}),
+                        ],
+                    },
+                )
+            ],
+        )
+
     def _build_ui(self) -> None:
         style = ttk.Style(self)
         self.style = style
@@ -912,15 +950,17 @@ class ControlPanel(tk.Tk):
             darkcolor=[("focus", colors["border"])],
         )
         style.map("TCombobox", fieldbackground=[("readonly", colors["input"])], foreground=[("readonly", colors["text"])])
-        style.configure("TButton", background=colors["surface"], foreground=colors["text"], bordercolor=colors["border"], lightcolor=colors["border"], darkcolor=colors["border"], padding=(12, 7), font=("Microsoft YaHei UI", 9))
+        style.configure("TButton", background=colors["surface"], foreground=colors["text"], bordercolor=colors["surface"], lightcolor=colors["surface"], darkcolor=colors["surface"], borderwidth=0, relief="flat", padding=(12, 7), font=("Microsoft YaHei UI", 9))
         style.map("TButton", background=[("active", colors["button_active"]), ("pressed", colors["button_pressed"])], foreground=[("disabled", colors["muted"])])
-        style.configure("Primary.TButton", background=colors["accent"], foreground=colors["background"], bordercolor=colors["accent"], padding=(14, 7), font=("Microsoft YaHei UI", 9, "bold"))
+        style.configure("Primary.TButton", background=colors["accent"], foreground=colors["background"], bordercolor=colors["accent"], lightcolor=colors["accent"], darkcolor=colors["accent"], borderwidth=0, relief="flat", padding=(14, 7), font=("Microsoft YaHei UI", 9, "bold"))
         style.map("Primary.TButton", background=[("active", colors["accent_active"]), ("pressed", colors["accent"])])
-        style.configure("Danger.TButton", background=colors["danger_soft"], foreground=colors["danger"], bordercolor=colors["danger_soft"], padding=(12, 7))
+        style.configure("Danger.TButton", background=colors["danger_soft"], foreground=colors["danger"], bordercolor=colors["danger_soft"], lightcolor=colors["danger_soft"], darkcolor=colors["danger_soft"], borderwidth=0, relief="flat", padding=(12, 7))
         style.map("Danger.TButton", background=[("active", colors["danger_active"]), ("pressed", colors["danger"])])
-        style.configure("TCheckbutton", background=colors["surface"], foreground=colors["text"], font=("Microsoft YaHei UI", 9))
-        style.map("TCheckbutton", background=[("active", colors["surface"])], foreground=[("active", colors["accent"])])
+        style.configure("TCheckbutton", background=colors["surface"], foreground=colors["text"], indicatorcolor=colors["input"], indicatormargin=(2, 2, 6, 2), font=("Microsoft YaHei UI", 9))
+        style.map("TCheckbutton", background=[("active", colors["surface"])], foreground=[("active", colors["accent"])], indicatorcolor=[("selected", colors["accent"]), ("pressed", colors["accent_active"]), ("active", colors["border"])])
+        style.configure("Horizontal.TProgressbar", troughcolor=colors["surface_alt"], background=colors["accent"], bordercolor=colors["surface_alt"], lightcolor=colors["accent"], darkcolor=colors["accent"], thickness=6)
         self._configure_notebook_style()
+        self._configure_flat_control_layouts(style)
         style.configure("Status.TLabel", background=colors["surface_alt"], foreground=colors["muted"], padding=(12, 10), font=("Cascadia Mono", 9))
         style.configure("StatusOnline.TLabel", background=colors["accent_soft"], foreground=colors["accent"], padding=(12, 10), font=("Cascadia Mono", 9, "bold"))
         style.configure("StatusOffline.TLabel", background=colors["danger_soft"], foreground=colors["danger"], padding=(12, 10), font=("Cascadia Mono", 9, "bold"))
