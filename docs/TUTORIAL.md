@@ -421,6 +421,8 @@ Start the optional local Tkinter panel with:
 python .\control_panel.py
 ```
 
+On Windows, double-click `start_control_panel.bat` for the same result.
+
 It includes the chat model, separate vision model, model detection, group
 policy, debounce, context, memory, token fields, and optional NapCat launcher
 paths. The save button only writes `.env.local` and deliberately leaves

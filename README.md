@@ -60,6 +60,8 @@ For users who do not want to edit `.env.local` by hand:
 python .\control_panel.py
 ```
 
+On Windows, you can also double-click `start_control_panel.bat`.
+
 The panel manages chat/vision models, model detection, group policy, debounce,
 context, memory, service tokens, and optional NapCat launch paths. **Save
 configuration** only writes `.env.local`; it does not restart anything. Use
