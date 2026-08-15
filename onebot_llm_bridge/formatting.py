@@ -22,10 +22,9 @@ def split_bubbles(text: str, max_bubbles: int = 4, max_chars: int = 600) -> list
     cleaned = text.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not cleaned:
         return []
-    if _BUBBLE_MARKER.search(cleaned):
-        parts = _BUBBLE_MARKER.split(cleaned)
-    else:
-        parts = re.split(r"\n+", cleaned)
+    # A model-generated line break is ordinary text. Only the explicit marker
+    # should create another QQ bubble, otherwise private chats split too easily.
+    parts = _BUBBLE_MARKER.split(cleaned) if _BUBBLE_MARKER.search(cleaned) else [cleaned]
     result: list[str] = []
     for part in parts:
         value = part.strip()

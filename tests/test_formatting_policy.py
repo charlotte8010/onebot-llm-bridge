@@ -23,8 +23,11 @@ class FormattingAndPolicyTests(unittest.TestCase):
     def test_split_bubbles_accepts_explicit_markers_and_drops_empty_parts(self) -> None:
         self.assertEqual(split_bubbles("[[BUBBLE]]第一句\n[[BUBBLE]]\n第二句"), ["第一句", "第二句"])
 
-    def test_split_bubbles_falls_back_to_lines_and_limits_count(self) -> None:
-        self.assertEqual(split_bubbles("a\nb\nc", max_bubbles=2), ["a", "b"])
+    def test_plain_line_break_stays_in_one_bubble(self) -> None:
+        self.assertEqual(split_bubbles("a\nb\nc", max_bubbles=2), ["a\nb\nc"])
+
+    def test_only_explicit_markers_create_multiple_bubbles(self) -> None:
+        self.assertEqual(split_bubbles("a\n[[BUBBLE]]b\n[[BUBBLE]]c", max_bubbles=2), ["a", "b"])
 
     def test_reply_actions_extracts_optional_reaction(self) -> None:
         self.assertEqual(

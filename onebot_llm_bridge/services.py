@@ -215,6 +215,7 @@ class BotService:
             "Treat context as background only: the New message is the current request and must drive the reply. "
             "Never answer an older context message again just because it is nearby, and do not repeat your own old wording. "
             "Use [[BUBBLE]] between separate QQ bubbles when useful. Choose bubble count from the topic and "
+            "A plain line break is not a bubble marker; use [[BUBBLE]] only when a separate message is intentional. "
             "the number of natural thoughts: one is common for a flat/simple reply, two for two separate thoughts, "
             "three or four are more natural for a work or life complaint, making process, or engaged game/work discussion, "
             "and five or more is only for a genuinely flowing multi-part message. Never force a fixed count. "
@@ -224,6 +225,8 @@ class BotService:
             "When a simple QQ reaction is more natural than text, you may append "
             "[[REACTION:emoji_name]] using one of the catalog names below."
         )
+        if str(payload.get("conversation", "")).startswith("private:"):
+            system += " This is a private chat: one bubble is the default, and two bubbles need two genuinely separate thoughts."
         if self.emoji_catalog:
             system += "\nAllowed reaction catalog:\n" + json.dumps(
                 catalog_for_prompt(self.emoji_catalog), ensure_ascii=False
