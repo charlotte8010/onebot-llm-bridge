@@ -1022,7 +1022,7 @@ class ControlPanel(tk.Tk):
         self._checkbutton(network, 13, 0, "启用自动摘要", self.summary_enabled, "SUMMARY_ENABLED", columnspan=2)
         self.summary_min_messages = self._entry(network, 14, "摘要触发条数", "SUMMARY_MIN_MESSAGES", "40")
         self.summary_delay = self._entry(network, 14, "摘要等待秒数", "SUMMARY_DELAY_SECONDS", "10", column=2)
-        ttk.Button(network, text="选择", command=lambda: self._select_path(self.napcat_boot, "选择 NapCat 启动程序")).grid(row=6, column=2, padx=(8, 0), pady=4)
+        ttk.Button(network, text="选择", command=self._select_napcat_boot).grid(row=6, column=2, padx=(8, 0), pady=4)
         ttk.Button(network, text="选择", command=lambda: self._select_path(self.napcat_qq, "选择 QQ 程序")).grid(row=7, column=2, padx=(8, 0), pady=4)
         ttk.Button(network, text="选择", command=lambda: self._select_path(self.napcat_hook, "选择 NapCat Hook")).grid(row=8, column=2, padx=(8, 0), pady=4)
 
@@ -1586,6 +1586,24 @@ class ControlPanel(tk.Tk):
         if selected:
             variable.set(selected)
 
+    def _select_napcat_boot(self) -> None:
+        selected = filedialog.askopenfilename(parent=self, title="选择 NapCat 启动程序")
+        if selected:
+            self.napcat_boot.set(selected)
+            self._autofill_napcat_paths(selected)
+
+    def _autofill_napcat_paths(self, boot: str) -> None:
+        """Fill QQ and Hook as soon as a NapCat launcher path is selected."""
+        discovered_qq = discover_qq_executable(boot)
+        if not self.napcat_qq.get().strip() and discovered_qq:
+            self.napcat_qq.set(str(discovered_qq))
+            self._append_log(f"已自动找到 QQ：{discovered_qq}")
+
+        hook = Path(boot).parent / "NapCatWinBootHook.dll"
+        if not self.napcat_hook.get().strip() and hook.is_file():
+            self.napcat_hook.set(str(hook))
+            self._append_log(f"已自动找到 NapCat Hook：{hook}")
+
     def _project_path(self, raw: str) -> Path:
         path = Path(raw.strip())
         return path if path.is_absolute() else ROOT / path
@@ -1849,17 +1867,13 @@ class ControlPanel(tk.Tk):
             return
         boot_path = Path(boot)
         command_boot, command_qq, command_hook = boot, qq, hook
-        if launcher_mode and not qq and not hook:
-            discovered_qq = discover_qq_executable(boot)
+        if launcher_mode:
+            self._autofill_napcat_paths(boot)
+            command_qq = self.napcat_qq.get().strip()
+            command_hook = self.napcat_hook.get().strip()
             adjacent_boot = boot_path.parent / "NapCatWinBootMain.exe"
-            adjacent_hook = boot_path.parent / "NapCatWinBootHook.dll"
-            if discovered_qq and adjacent_boot.is_file() and adjacent_hook.is_file():
+            if command_qq and command_hook and adjacent_boot.is_file():
                 command_boot = str(adjacent_boot)
-                command_qq = str(discovered_qq)
-                command_hook = str(adjacent_hook)
-                self.napcat_qq.set(command_qq)
-                self.napcat_hook.set(command_hook)
-                self._append_log(f"已自动找到 QQ：{discovered_qq}")
             else:
                 self._append_log("未自动找到完整 QQ 路径，将交给 launcher.bat 自己处理")
         command = build_napcat_command(command_boot, command_qq, command_hook)
