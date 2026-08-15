@@ -9,10 +9,11 @@ import sys
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
 
 
 ROOT = Path(__file__).resolve().parent
@@ -20,6 +21,7 @@ ENV_FILE = ROOT / ".env.local"
 PRESETS_FILE = ROOT / ".model_presets.json"
 BOT_SCRIPT = ROOT / "bot_service.py"
 BRIDGE_SCRIPT = ROOT / "app.py"
+DEFAULT_NAPCAT_API_URL = "http://127.0.0.1:3000"
 
 
 def load_env_file(path: Path) -> dict[str, str]:
@@ -137,6 +139,7 @@ class ControlPanel(tk.Tk):
         self.log_queue: queue.Queue[str] = queue.Queue()
         self.bot = ServiceProcess("bot", BOT_SCRIPT, self.log_queue)
         self.bridge = ServiceProcess("bridge", BRIDGE_SCRIPT, self.log_queue)
+        self.napcat_process: subprocess.Popen[bytes] | None = None
         self._build_ui()
         self.after(200, self._drain_logs)
         self.after(1000, self._refresh_status)
@@ -225,17 +228,24 @@ class ControlPanel(tk.Tk):
         network.pack(fill="x", pady=(10, 0))
         network.columnconfigure(1, weight=1)
         network.columnconfigure(3, weight=1)
-        self.napcat_url = self._entry(network, 0, "NapCat API", "NAPCAT_API_URL", "http://127.0.0.1:3000")
+        self.napcat_url = self._entry(network, 0, "NapCat API", "NAPCAT_API_URL", DEFAULT_NAPCAT_API_URL)
         self.napcat_access = self._entry(network, 1, "NapCat Access Token", "NAPCAT_ACCESS_TOKEN", secret=True)
         self.event_token = self._entry(network, 2, "事件上报 Token", "NAPCAT_EVENT_TOKEN", secret=True)
         self.service_token = self._entry(network, 3, "Bot 服务 Token", "BOT_SERVICE_TOKEN", secret=True)
         self.bridge_port = self._entry(network, 4, "Bridge 端口", "BRIDGE_PORT", "8766")
         self.bot_port = self._entry(network, 5, "Bot 端口", "BOT_SERVICE_PORT", "8765")
+        self.napcat_boot = self._entry(network, 6, "NapCat 启动程序", "NAPCAT_BOOT")
+        self.napcat_qq = self._entry(network, 7, "QQ 程序", "NAPCAT_QQ")
+        self.napcat_hook = self._entry(network, 8, "NapCat Hook", "NAPCAT_HOOK")
+        ttk.Button(network, text="选择", command=lambda: self._select_path(self.napcat_boot, "选择 NapCat 启动程序")).grid(row=6, column=2, padx=(8, 0), pady=4)
+        ttk.Button(network, text="选择", command=lambda: self._select_path(self.napcat_qq, "选择 QQ 程序")).grid(row=7, column=2, padx=(8, 0), pady=4)
+        ttk.Button(network, text="选择", command=lambda: self._select_path(self.napcat_hook, "选择 NapCat Hook")).grid(row=8, column=2, padx=(8, 0), pady=4)
 
         actions = ttk.Frame(outer)
         actions.pack(fill="x", pady=10)
         ttk.Button(actions, text="保存配置（不重启）", command=self.save_config).pack(side="left")
         ttk.Button(actions, text="启动全部", command=self.start_all).pack(side="left", padx=6)
+        ttk.Button(actions, text="启动 NapCat", command=self.start_napcat).pack(side="left", padx=6)
         ttk.Button(actions, text="重启全部", command=self.restart_all).pack(side="left", padx=6)
         ttk.Button(actions, text="停止全部", command=self.stop_all).pack(side="left", padx=6)
 
@@ -295,6 +305,7 @@ class ControlPanel(tk.Tk):
             "TYPING_STATUS": "true" if self.typing.get() else "false", "PERSONA_FILE": self.persona.get().strip(),
             "NAPCAT_API_URL": self.napcat_url.get().strip(), "NAPCAT_ACCESS_TOKEN": self.napcat_access.get().strip(), "NAPCAT_EVENT_TOKEN": self.event_token.get().strip(),
             "BOT_SERVICE_TOKEN": self.service_token.get().strip(), "BRIDGE_PORT": self.bridge_port.get().strip(), "BOT_SERVICE_PORT": self.bot_port.get().strip(),
+            "NAPCAT_BOOT": self.napcat_boot.get().strip(), "NAPCAT_QQ": self.napcat_qq.get().strip(), "NAPCAT_HOOK": self.napcat_hook.get().strip(),
         }
 
     def _environment(self) -> dict[str, str]:
@@ -315,8 +326,10 @@ class ControlPanel(tk.Tk):
         try:
             if values.get("VISION_MODE") not in {"off", "direct", "separate"}:
                 raise ValueError("VISION_MODE 必须是 off、direct 或 separate")
-            int(values.get("BRIDGE_PORT", "8766"))
-            int(values.get("BOT_SERVICE_PORT", "8765"))
+            for key in ("BRIDGE_PORT", "BOT_SERVICE_PORT"):
+                port = int(values.get(key, ""))
+                if not 1 <= port <= 65535:
+                    raise ValueError(f"{key} 必须是 1 到 65535 之间的端口")
         except ValueError as exc:
             messagebox.showwarning("配置无效", str(exc), parent=self)
             return False
@@ -423,11 +436,16 @@ class ControlPanel(tk.Tk):
         if not self.save_config():
             return
         env = self._environment()
-        if not port_open(int(self.bot_port.get() or "8765")):
+        bot_port = self._port_value(self.bot_port, 8765)
+        bridge_port = self._port_value(self.bridge_port, 8766)
+        if bot_port is None or bridge_port is None:
+            self._append_log("端口无效，请填写 1 到 65535 之间的数字")
+            return
+        if not port_open(bot_port):
             self.bot.start(env)
         else:
             self._append_log("Bot 端口已被占用，未重复启动")
-        if not port_open(int(self.bridge_port.get() or "8766")):
+        if not port_open(bridge_port):
             self.bridge.start(env)
         else:
             self._append_log("Bridge 端口已被占用，未重复启动")
@@ -441,11 +459,67 @@ class ControlPanel(tk.Tk):
         self.bridge.stop()
         self._append_log("已停止控制台启动的 Bot 和 Bridge")
 
+    @staticmethod
+    def _port_value(variable: tk.StringVar, default: int) -> int | None:
+        raw = variable.get().strip() or str(default)
+        try:
+            value = int(raw)
+        except ValueError:
+            return None
+        return value if 1 <= value <= 65535 else None
+
+    def _select_path(self, variable: tk.StringVar, title: str) -> None:
+        selected = filedialog.askopenfilename(parent=self, title=title)
+        if selected:
+            variable.set(selected)
+
+    def start_napcat(self) -> None:
+        api_url = self.napcat_url.get().strip() or DEFAULT_NAPCAT_API_URL
+        try:
+            api_port = urlsplit(api_url).port or 3000
+        except ValueError:
+            api_port = 3000
+        if port_open(api_port):
+            self._append_log(f"NapCat API 已经在运行（端口 {api_port}），没有重复启动")
+            return
+        if self.napcat_process and self.napcat_process.poll() is None:
+            self._append_log("NapCat 已经由本控制台启动")
+            return
+
+        paths = [self.napcat_boot.get().strip(), self.napcat_qq.get().strip(), self.napcat_hook.get().strip()]
+        if not all(paths):
+            messagebox.showwarning(
+                "NapCat 路径未配置",
+                "请先填写 NapCat 启动程序、QQ 程序和 Hook 路径。\n"
+                "也可以直接在配置文件中填写 NAPCAT_BOOT、NAPCAT_QQ、NAPCAT_HOOK。",
+                parent=self,
+            )
+            return
+        missing = [path for path in paths if not Path(path).is_file()]
+        if missing:
+            messagebox.showwarning(
+                "NapCat 文件不存在",
+                "下面的路径找不到：\n\n" + "\n".join(missing),
+                parent=self,
+            )
+            return
+        boot, qq, hook = (Path(path) for path in paths)
+        try:
+            self.napcat_process = subprocess.Popen(
+                [str(boot), str(qq), str(hook)],
+                cwd=boot.parent,
+                creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
+            )
+        except OSError as exc:
+            messagebox.showerror("NapCat 启动失败", str(exc), parent=self)
+            return
+        self._append_log(f"已启动 NapCat：{boot}")
+
     def _refresh_status(self) -> None:
-        bot_port = int(self.bot_port.get() or "8765")
-        bridge_port = int(self.bridge_port.get() or "8766")
-        self.bot_status.configure(text=f"Bot: {'运行中' if port_open(bot_port) else '未运行'}")
-        self.bridge_status.configure(text=f"Bridge: {'运行中' if port_open(bridge_port) else '未运行'}")
+        bot_port = self._port_value(self.bot_port, 8765)
+        bridge_port = self._port_value(self.bridge_port, 8766)
+        self.bot_status.configure(text="Bot: 端口无效" if bot_port is None else f"Bot: {'运行中' if port_open(bot_port) else '未运行'}")
+        self.bridge_status.configure(text="Bridge: 端口无效" if bridge_port is None else f"Bridge: {'运行中' if port_open(bridge_port) else '未运行'}")
         self.vision_status.configure(text=f"识图: {self.vision_mode.get()} / {self.vision_model.get() or '未配置'}")
         self.after(2000, self._refresh_status)
 

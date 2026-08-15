@@ -422,9 +422,11 @@ python .\control_panel.py
 ```
 
 It includes the chat model, separate vision model, model detection, group
-policy, debounce, context, memory, and token fields. The save button only
-writes `.env.local` and deliberately leaves running services alone. Click
-restart manually after saving when you want the new values to take effect.
+policy, debounce, context, memory, token fields, and optional NapCat launcher
+paths. The save button only writes `.env.local` and deliberately leaves
+running services alone. Use **Start NapCat** once the three Windows paths are
+filled, then click **Start all** for the bridge and bot service. Click restart
+manually after saving when you want new values to take effect.
 
 ## Optional persistent context
 
