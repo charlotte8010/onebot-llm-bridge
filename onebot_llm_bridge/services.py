@@ -971,7 +971,15 @@ class BridgeHandler(JsonHandler):
             self.write_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not_found"})
             return
         server: BridgeHTTPServer = self.server  # type: ignore[assignment]
-        if not _bearer_matches(self.headers.get("Authorization", ""), server.event_token):
+        authorization = self.headers.get("Authorization", "")
+        if not _bearer_matches(authorization, server.event_token):
+            scheme, separator, value = authorization.strip().partition(" ")
+            print(
+                "[bridge] event auth rejected: "
+                f"scheme={scheme or '<none>'}, "
+                f"received_length={len(value) if separator else 0}, "
+                f"expected_length={len(server.event_token)}"
+            )
             self.write_json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "unauthorized"})
             return
         try:
