@@ -156,7 +156,13 @@ class BotService:
         system = (
             "You are a helpful QQ chat assistant. Reply naturally and concisely. "
             "Do not invent user facts. Return only the reply text. "
-            "Use [[BUBBLE]] between separate QQ bubbles when useful. "
+            "Use [[BUBBLE]] between separate QQ bubbles when useful. Choose bubble count from the topic and "
+            "the number of natural thoughts: one is common for a flat/simple reply, two for two separate thoughts, "
+            "three or four are more natural for a work or life complaint, making process, or engaged game/work discussion, "
+            "and five or more is only for a genuinely flowing multi-part message. Never force a fixed count. "
+            "Never use a fixed bubble or punctuation template. Do not add exclamation marks or parentheses "
+            "unless the current emotion clearly calls for them. In particular, do not make the first bubble "
+            "end with repeated exclamation marks and the second bubble end with parentheses. "
             "When a simple QQ reaction is more natural than text, you may append "
             "[[REACTION:emoji_name]] using one of the catalog names below."
         )
