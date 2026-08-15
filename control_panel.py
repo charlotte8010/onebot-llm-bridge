@@ -192,8 +192,8 @@ class ControlPanel(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("OneBot LLM Bridge 控制台")
-        self.geometry("1180x860")
-        self.minsize(900, 650)
+        self.geometry("980x720")
+        self.minsize(820, 560)
         self.values = load_env_file(ENV_FILE)
         self.presets = load_presets(PRESETS_FILE)
         self.log_queue: queue.Queue[str] = queue.Queue()
@@ -226,15 +226,15 @@ class ControlPanel(tk.Tk):
             style="Subtitle.TLabel",
         ).pack(anchor="w", pady=(3, 10))
 
-        canvas = tk.Canvas(outer, highlightthickness=0, height=510)
-        scrollbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
-        canvas.configure(yscrollcommand=scrollbar.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        self.settings = ttk.Frame(canvas)
-        window = canvas.create_window((0, 0), window=self.settings, anchor="nw")
-        self.settings.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=event.width))
+        notebook = ttk.Notebook(outer)
+        notebook.pack(fill="both", expand=True)
+        model_tab = ttk.Frame(notebook, padding=8)
+        behavior_tab = ttk.Frame(notebook, padding=8)
+        network_tab = ttk.Frame(notebook, padding=8)
+        notebook.add(model_tab, text="模型与识图")
+        notebook.add(behavior_tab, text="回复与记忆")
+        notebook.add(network_tab, text="连接与服务")
+        self.settings = model_tab
 
         model = ttk.LabelFrame(self.settings, text="模型连接", padding=10)
         model.pack(fill="x")
@@ -268,6 +268,7 @@ class ControlPanel(tk.Tk):
         self.vision_timeout = self._entry(vision, 5, "视觉超时秒数", "VISION_TIMEOUT_SECONDS", "30")
         ttk.Label(vision, text="separate 会先让视觉模型描述图片，再交给主聊天模型；视觉 Key 和地址留空时复用主模型。", style="Subtitle.TLabel").grid(row=6, column=0, columnspan=3, sticky="w", pady=(3, 0))
 
+        self.settings = behavior_tab
         behavior = ttk.LabelFrame(self.settings, text="回复与记忆", padding=10)
         behavior.pack(fill="x", pady=(10, 0))
         behavior.columnconfigure(1, weight=1)
@@ -284,6 +285,7 @@ class ControlPanel(tk.Tk):
         ttk.Checkbutton(behavior, text="显示输入状态", variable=self.typing).grid(row=6, column=0, columnspan=2, sticky="w", pady=4)
         self.persona = self._entry(behavior, 7, "Persona 文件", "PERSONA_FILE", "")
 
+        self.settings = network_tab
         network = ttk.LabelFrame(self.settings, text="服务与 Token", padding=10)
         network.pack(fill="x", pady=(10, 0))
         network.columnconfigure(1, weight=1)
@@ -319,7 +321,7 @@ class ControlPanel(tk.Tk):
         log_frame = ttk.LabelFrame(outer, text="实时日志", padding=8)
         log_frame.pack(fill="both", expand=True, pady=(10, 0))
         ttk.Button(log_frame, text="清空日志", command=self.clear_log).pack(anchor="e")
-        self.log = tk.Text(log_frame, height=8, wrap="none", state="disabled", font=("Cascadia Mono", 10))
+        self.log = tk.Text(log_frame, height=6, wrap="none", state="disabled", font=("Cascadia Mono", 10))
         self.log.pack(fill="both", expand=True)
 
     def _label(self, parent: ttk.Frame, row: int, column: int, text: str) -> None:
