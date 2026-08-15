@@ -803,6 +803,7 @@ class ControlPanel(tk.Tk):
             lightcolor=colors["muted"],
             darkcolor=colors["muted"],
             arrowcolor=colors["muted"],
+            gripcount=0,
             relief="flat",
         )
         style.map(
@@ -976,6 +977,7 @@ class ControlPanel(tk.Tk):
             lightcolor=colors["muted"],
             darkcolor=colors["muted"],
             arrowcolor=colors["muted"],
+            gripcount=0,
             relief="flat",
         )
         style.map(
