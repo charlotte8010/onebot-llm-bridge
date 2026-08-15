@@ -2,6 +2,7 @@
 .env.local
 .env.*.local
 .model_presets.json
+.control_panel_theme.json
 .local/
 .venv/
 __pycache__/

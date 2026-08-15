@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
+import ctypes
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Callable
@@ -19,9 +20,24 @@ from urllib.parse import urlsplit
 ROOT = Path(__file__).resolve().parent
 ENV_FILE = ROOT / ".env.local"
 PRESETS_FILE = ROOT / ".model_presets.json"
+THEME_FILE = ROOT / ".control_panel_theme.json"
 BOT_SCRIPT = ROOT / "bot_service.py"
 BRIDGE_SCRIPT = ROOT / "app.py"
 DEFAULT_NAPCAT_API_URL = "http://127.0.0.1:3000"
+DEFAULT_WINDOW_GEOMETRY = "1040x860"
+
+
+def enable_windows_dpi_awareness() -> None:
+    """Keep Tk from being bitmap-scaled by Windows on high-DPI displays."""
+    if sys.platform != "win32":
+        return
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except (AttributeError, OSError):
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except (AttributeError, OSError):
+            pass
 
 
 def load_env_file(path: Path) -> dict[str, str]:
@@ -65,6 +81,18 @@ def save_presets(path: Path, presets: dict[str, dict[str, str]]) -> None:
     path.write_text(json.dumps(presets, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def load_theme(path: Path) -> str:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return "morandi"
+    return str(payload.get("theme", "morandi")) if isinstance(payload, dict) and payload.get("theme") in {"dark", "morandi"} else "morandi"
+
+
+def save_theme(path: Path, theme: str) -> None:
+    path.write_text(json.dumps({"theme": theme}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def parse_model_ids(payload: object) -> list[str]:
     if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
         return []
@@ -90,6 +118,16 @@ def parse_port(raw: str, default: int) -> int | None:
     except ValueError:
         return None
     return value if 1 <= value <= 65535 else None
+
+
+def local_url_port(raw_url: str, default: int | None = None) -> int | None:
+    try:
+        parsed = urlsplit(raw_url.strip())
+    except ValueError:
+        return None
+    if parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        return None
+    return parsed.port or default
 
 
 def missing_vision_config() -> str:
@@ -188,18 +226,180 @@ class ServiceProcess:
             self.process.kill()
 
 
+class FixedTabNotebook(tk.Frame):
+    """A fixed-height tab strip that does not inherit native focus geometry."""
+
+    TAB_HEIGHT = 46
+
+    def __init__(self, master: tk.Misc, colors: dict[str, str]) -> None:
+        super().__init__(master, background=colors["background"], highlightthickness=0)
+        self._colors = colors
+        self._tabs: list[tuple[tk.Misc, tk.Frame, tk.Label]] = []
+        self._selected = -1
+        self._tab_changed_callback: Callable[[object], None] | None = None
+        self._tab_bar = tk.Frame(self, background=colors["background"], height=self.TAB_HEIGHT)
+        self._tab_bar.grid(row=0, column=0, sticky="ew")
+        self._tab_bar.grid_propagate(False)
+        self._tab_bar.rowconfigure(0, minsize=self.TAB_HEIGHT, weight=1)
+        self._content = tk.Frame(self, background=colors["background"], highlightthickness=0)
+        self._content.grid(row=1, column=0, sticky="nsew")
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, minsize=self.TAB_HEIGHT, weight=0)
+        self.rowconfigure(1, weight=1)
+
+    def content_parent(self) -> tk.Frame:
+        return self._content
+
+    def bind(self, sequence: str | None = None, func: Callable[..., object] | None = None, add: str | bool | None = None):  # type: ignore[override]
+        if sequence == "<<NotebookTabChanged>>":
+            self._tab_changed_callback = func  # type: ignore[assignment]
+            return ""
+        return super().bind(sequence, func, add)
+
+    def add(self, child: tk.Misc, text: str = "") -> None:
+        index = len(self._tabs)
+        tab_frame = tk.Frame(
+            self._tab_bar,
+            background=self._colors["background"],
+            highlightbackground=self._colors["border"],
+            highlightcolor=self._colors["border"],
+            highlightthickness=1,
+            bd=0,
+            height=self.TAB_HEIGHT,
+        )
+        tab_frame.grid(row=0, column=index, sticky="nsew", padx=(0, 1))
+        tab_frame.grid_propagate(False)
+        tab_label = tk.Label(
+            tab_frame,
+            text=text,
+            background=self._colors["background"],
+            foreground=self._colors["muted"],
+            font=("Microsoft YaHei UI", 10, "bold"),
+            anchor="center",
+            cursor="hand2",
+            bd=0,
+            highlightthickness=0,
+        )
+        tab_label.pack(fill="both", expand=True)
+        self._tab_bar.columnconfigure(index, weight=1)
+        child.grid(in_=self._content, row=0, column=0, sticky="nsew")
+        self._content.columnconfigure(0, weight=1)
+        self._content.rowconfigure(0, weight=1)
+        self._tabs.append((child, tab_frame, tab_label))
+        tab_frame.bind("<Button-1>", lambda _event, selected=index: self.select(selected))
+        tab_label.bind("<Button-1>", lambda _event, selected=index: self.select(selected))
+        if self._selected == -1:
+            self.select(0)
+
+    def select(self, tab: int | tk.Misc | None = None) -> tk.Misc | None:
+        if tab is None:
+            return self._tabs[self._selected][0] if self._selected >= 0 else None
+        index = self.index(tab)
+        if index == self._selected:
+            return self._tabs[index][0]
+        self._selected = index
+        for current_index, (child, frame, label) in enumerate(self._tabs):
+            selected = current_index == index
+            frame.configure(background=self._colors["surface"] if selected else self._colors["background"])
+            label.configure(
+                background=self._colors["surface"] if selected else self._colors["background"],
+                foreground=self._colors["accent"] if selected else self._colors["muted"],
+            )
+            if selected:
+                child.tkraise()
+        if self._tab_changed_callback is not None:
+            event = tk.Event()
+            event.widget = self
+            self._tab_changed_callback(event)
+        return self._tabs[index][0]
+
+    def index(self, tab: int | tk.Misc) -> int:
+        if isinstance(tab, int):
+            if 0 <= tab < len(self._tabs):
+                return tab
+            raise tk.TclError("tab index out of range")
+        for index, (child, _frame, _label) in enumerate(self._tabs):
+            if child == tab:
+                return index
+        raise tk.TclError("unknown tab")
+
+    def apply_theme(self, colors: dict[str, str]) -> None:
+        self._colors = colors
+        self.configure(background=colors["background"])
+        self._tab_bar.configure(background=colors["background"])
+        self._content.configure(background=colors["background"])
+        for index, (_child, frame, label) in enumerate(self._tabs):
+            selected = index == self._selected
+            background = colors["surface"] if selected else colors["background"]
+            frame.configure(background=background, highlightbackground=colors["border"], highlightcolor=colors["border"])
+            label.configure(background=background, foreground=colors["accent"] if selected else colors["muted"])
+
+
 class ControlPanel(tk.Tk):
+    THEMES = {
+        "morandi": {
+            "background": "#F3F4EE",
+            "surface": "#EDEBE3",
+            "surface_alt": "#E8E2DA",
+            "input": "#EFEFF4",
+            "border": "#E4E7EE",
+            "text": "#34363A",
+            "muted": "#73777D",
+            "accent": "#586572",
+            "accent_active": "#46535F",
+            "accent_soft": "#E4E7EE",
+            "amber": "#A96860",
+            "amber_active": "#8F504A",
+            "amber_soft": "#F1DEDB",
+            "danger": "#B85650",
+            "danger_active": "#C96961",
+            "danger_soft": "#F2D8D4",
+            "button_active": "#E4E7EE",
+            "button_pressed": "#D8DCE5",
+            "log": "#EFEFF4",
+        },
+        "dark": {
+            "background": "#2D2D39",
+            "surface": "#35343D",
+            "surface_alt": "#3D3B40",
+            "input": "#434343",
+            "border": "#4A4A4A",
+            "text": "#F3F4EE",
+            "muted": "#A59C95",
+            "accent": "#D9DEE3",
+            "accent_active": "#EEF0F2",
+            "accent_soft": "#5E685F",
+            "amber": "#D58B84",
+            "amber_active": "#E7A29A",
+            "amber_soft": "#5B3D3D",
+            "danger": "#F08A83",
+            "danger_active": "#FFAAA2",
+            "danger_soft": "#633A3A",
+            "button_active": "#687480",
+            "button_pressed": "#7D8892",
+            "log": "#35343D",
+        },
+    }
+    COLORS = THEMES["morandi"]
+
     def __init__(self) -> None:
+        enable_windows_dpi_awareness()
         super().__init__()
-        self.title("OneBot LLM Bridge 控制台")
-        self.geometry("980x720")
-        self.minsize(820, 560)
+        self.title("OneBot LLM Bridge | 控制台")
+        self.geometry(DEFAULT_WINDOW_GEOMETRY)
+        self.minsize(960, 700)
         self.values = load_env_file(ENV_FILE)
         self.presets = load_presets(PRESETS_FILE)
+        self.theme_name = load_theme(THEME_FILE)
+        self.COLORS = dict(self.THEMES[self.theme_name])
         self.log_queue: queue.Queue[str] = queue.Queue()
+        self._scrollbar_visibility_job: str | None = None
+        self._scroll_job: str | None = None
+        self._pending_scroll_units = 0
         self.bot = ServiceProcess("bot", BOT_SCRIPT, self.log_queue)
         self.bridge = ServiceProcess("bridge", BRIDGE_SCRIPT, self.log_queue)
         self.napcat_process: subprocess.Popen[bytes] | None = None
+        self._status_probe_in_flight = False
         self._build_ui()
         self.after(200, self._drain_logs)
         self.after(1000, self._refresh_status)
@@ -208,39 +408,188 @@ class ControlPanel(tk.Tk):
     def _value(self, key: str, default: str = "") -> str:
         return self.values.get(key, os.environ.get(key, default)).strip()
 
+    def toggle_theme(self) -> None:
+        self.theme_name = "dark" if self.theme_name == "morandi" else "morandi"
+        self.COLORS = dict(self.THEMES[self.theme_name])
+        save_theme(THEME_FILE, self.theme_name)
+        self._apply_theme_styles()
+        self._append_log(f"已切换到{'夜间' if self.theme_name == 'dark' else '莫兰迪浅色'}模式")
+
+    def _apply_theme_styles(self) -> None:
+        style = self.style
+        colors = self.COLORS
+        self.configure(background=colors["background"])
+        style.configure("TFrame", background=colors["surface"])
+        style.configure("App.TFrame", background=colors["background"])
+        style.configure("Surface.TFrame", background=colors["surface"])
+        style.configure("Command.TFrame", background=colors["surface_alt"])
+        style.configure("Title.TLabel", background=colors["background"], foreground=colors["text"])
+        style.configure("Eyebrow.TLabel", background=colors["background"], foreground=colors["accent"])
+        style.configure("Subtitle.TLabel", background=colors["background"], foreground=colors["muted"])
+        style.configure("Form.TLabel", background=colors["surface"], foreground=colors["text"])
+        style.configure("Hint.TLabel", background=colors["surface"], foreground=colors["muted"])
+        style.configure("CommandHint.TLabel", background=colors["surface_alt"], foreground=colors["muted"])
+        style.configure("Section.TLabelframe", background=colors["surface"], foreground=colors["border"], bordercolor=colors["border"])
+        style.configure("Section.TLabelframe.Label", background=colors["surface"], foreground=colors["accent"])
+        style.configure("TLabel", background=colors["surface"], foreground=colors["text"])
+        style.configure("TEntry", fieldbackground=colors["input"], foreground=colors["text"], bordercolor=colors["border"], lightcolor=colors["border"], darkcolor=colors["border"])
+        style.configure("TCombobox", fieldbackground=colors["input"], foreground=colors["text"], bordercolor=colors["border"], lightcolor=colors["border"], darkcolor=colors["border"])
+        style.map("TCombobox", fieldbackground=[("readonly", colors["input"])], foreground=[("readonly", colors["text"])])
+        style.configure("TButton", background=colors["surface"], foreground=colors["text"], bordercolor=colors["border"], lightcolor=colors["border"], darkcolor=colors["border"])
+        style.map("TButton", background=[("active", colors["button_active"]), ("pressed", colors["button_pressed"])], foreground=[("disabled", colors["muted"])])
+        style.configure("Primary.TButton", background=colors["accent"], foreground=colors["background"], bordercolor=colors["accent"])
+        style.map("Primary.TButton", background=[("active", colors["accent_active"]), ("pressed", colors["accent"])])
+        style.configure("Danger.TButton", background=colors["danger_soft"], foreground=colors["danger"], bordercolor=colors["danger_soft"])
+        style.map("Danger.TButton", background=[("active", colors["danger_active"]), ("pressed", colors["danger"])])
+        style.configure("TCheckbutton", background=colors["surface"], foreground=colors["text"])
+        style.map("TCheckbutton", background=[("active", colors["surface"])], foreground=[("active", colors["accent"])])
+        self._configure_notebook_style()
+        style.configure("Status.TLabel", background=colors["surface_alt"], foreground=colors["muted"])
+        style.configure("StatusOnline.TLabel", background=colors["accent_soft"], foreground=colors["accent"])
+        style.configure("StatusOffline.TLabel", background=colors["danger_soft"], foreground=colors["danger"])
+        style.configure("StatusInfo.TLabel", background=colors["amber_soft"], foreground=colors["amber"])
+        style.configure("Panel.Vertical.TScrollbar", troughcolor=colors["input"], background=colors["border"], bordercolor=colors["input"], arrowcolor=colors["muted"])
+        if hasattr(self, "log"):
+            self.log.configure(background=colors["log"], foreground=colors["text"], insertbackground=colors["accent"], selectbackground=colors["accent_soft"])
+        for canvas in getattr(self, "_tab_canvases", []):
+            canvas.configure(background=colors["background"])
+        if hasattr(self, "notebook"):
+            self.notebook.apply_theme(colors)
+        if hasattr(self, "theme_button"):
+            self.theme_button.configure(text="切换夜间" if self.theme_name == "morandi" else "切换浅色")
+
+    def _configure_notebook_style(self) -> None:
+        colors = self.COLORS
+        self.style.configure(
+            "TNotebook",
+            background=colors["background"],
+            borderwidth=0,
+            tabmargins=(0, 0, 0, 0),
+        )
+        self.style.configure(
+            "TNotebook.Tab",
+            background=colors["background"],
+            foreground=colors["muted"],
+            padding=(18, 9),
+            borderwidth=0,
+            width=14,
+            font=("Microsoft YaHei UI", 10, "bold"),
+        )
+        # The default clam layout inserts Notebook.focus, which draws the
+        # dotted focus rectangle around the selected tab.
+        self.style.layout(
+            "TNotebook.Tab",
+            [
+                (
+                    "Notebook.tab",
+                    {
+                        "sticky": "nswe",
+                        "children": [
+                            (
+                                "Notebook.padding",
+                                {
+                                    "side": "top",
+                                    "sticky": "nswe",
+                                    "children": [("Notebook.label", {"side": "top", "sticky": ""})],
+                                },
+                            )
+                        ],
+                    },
+                )
+            ],
+        )
+        self.style.map(
+            "TNotebook.Tab",
+            background=[("selected", colors["surface"])],
+            foreground=[("selected", colors["accent"])],
+        )
+
     def _build_ui(self) -> None:
         style = ttk.Style(self)
+        self.style = style
         try:
-            style.theme_use("vista")
+            style.theme_use("clam")
         except tk.TclError:
             pass
-        style.configure("Title.TLabel", font=("Microsoft YaHei UI", 20, "bold"))
-        style.configure("Subtitle.TLabel", foreground="#666666")
-        style.configure("Status.TLabel", padding=(8, 7))
+        colors = self.COLORS
+        self.configure(background=colors["background"])
+        style.configure("TFrame", background=colors["surface"])
+        style.configure("App.TFrame", background=colors["background"])
+        style.configure("Surface.TFrame", background=colors["surface"])
+        style.configure("Command.TFrame", background=colors["surface_alt"])
+        style.configure("Title.TLabel", background=colors["background"], foreground=colors["text"], font=("Microsoft YaHei UI", 22, "bold"))
+        style.configure("Eyebrow.TLabel", background=colors["background"], foreground=colors["accent"], font=("Cascadia Mono", 9, "bold"))
+        style.configure("Subtitle.TLabel", background=colors["background"], foreground=colors["muted"], font=("Microsoft YaHei UI", 10))
+        style.configure("Form.TLabel", background=colors["surface"], foreground=colors["text"], font=("Microsoft YaHei UI", 10))
+        style.configure("Hint.TLabel", background=colors["surface"], foreground=colors["muted"], font=("Microsoft YaHei UI", 9))
+        style.configure("CommandHint.TLabel", background=colors["surface_alt"], foreground=colors["muted"], font=("Microsoft YaHei UI", 9))
+        style.configure("Section.TLabelframe", background=colors["surface"], foreground=colors["border"], bordercolor=colors["border"], relief="solid", borderwidth=1)
+        style.configure("Section.TLabelframe.Label", background=colors["surface"], foreground=colors["accent"], font=("Microsoft YaHei UI", 10, "bold"))
+        style.configure("TLabel", background=colors["surface"], foreground=colors["text"])
+        style.configure("TEntry", fieldbackground=colors["input"], foreground=colors["text"], bordercolor=colors["border"], lightcolor=colors["border"], darkcolor=colors["border"], padding=(8, 6))
+        style.configure("TCombobox", fieldbackground=colors["input"], foreground=colors["text"], bordercolor=colors["border"], lightcolor=colors["border"], darkcolor=colors["border"], padding=(7, 5))
+        style.map("TCombobox", fieldbackground=[("readonly", colors["input"])], foreground=[("readonly", colors["text"])])
+        style.configure("TButton", background=colors["surface"], foreground=colors["text"], bordercolor=colors["border"], lightcolor=colors["border"], darkcolor=colors["border"], padding=(12, 7), font=("Microsoft YaHei UI", 9))
+        style.map("TButton", background=[("active", colors["button_active"]), ("pressed", colors["button_pressed"])], foreground=[("disabled", colors["muted"])])
+        style.configure("Primary.TButton", background=colors["accent"], foreground=colors["background"], bordercolor=colors["accent"], padding=(14, 7), font=("Microsoft YaHei UI", 9, "bold"))
+        style.map("Primary.TButton", background=[("active", colors["accent_active"]), ("pressed", colors["accent"])])
+        style.configure("Danger.TButton", background=colors["danger_soft"], foreground=colors["danger"], bordercolor=colors["danger_soft"], padding=(12, 7))
+        style.map("Danger.TButton", background=[("active", colors["danger_active"]), ("pressed", colors["danger"])])
+        style.configure("TCheckbutton", background=colors["surface"], foreground=colors["text"], font=("Microsoft YaHei UI", 9))
+        style.map("TCheckbutton", background=[("active", colors["surface"])], foreground=[("active", colors["accent"])])
+        self._configure_notebook_style()
+        style.configure("Status.TLabel", background=colors["surface_alt"], foreground=colors["muted"], padding=(12, 10), font=("Cascadia Mono", 9))
+        style.configure("StatusOnline.TLabel", background=colors["accent_soft"], foreground=colors["accent"], padding=(12, 10), font=("Cascadia Mono", 9, "bold"))
+        style.configure("StatusOffline.TLabel", background=colors["danger_soft"], foreground=colors["danger"], padding=(12, 10), font=("Cascadia Mono", 9, "bold"))
+        style.configure("StatusInfo.TLabel", background=colors["amber_soft"], foreground=colors["amber"], padding=(12, 10), font=("Cascadia Mono", 9))
         style.configure(
             "Panel.Vertical.TScrollbar",
-            width=10,
-            troughcolor="#eef1f5",
-            background="#b9c0ca",
-            bordercolor="#eef1f5",
-            arrowcolor="#68717d",
+            width=12,
+            troughcolor=colors["input"],
+            background=colors["border"],
+            bordercolor=colors["input"],
+            arrowcolor=colors["muted"],
         )
-        style.configure("TNotebook", tabmargins=(0, 0, 0, 0))
-        style.configure("TNotebook.Tab", padding=(18, 8))
-        outer = ttk.Frame(self, padding=14)
+        outer = ttk.Frame(self, padding=(24, 20, 24, 18), style="App.TFrame")
         outer.pack(fill="both", expand=True)
-        ttk.Label(outer, text="OneBot LLM Bridge 控制台", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(3, weight=1)
+        header = ttk.Frame(outer, style="App.TFrame")
+        header.grid(row=0, column=0, sticky="ew")
+        header_top = ttk.Frame(header, style="App.TFrame")
+        header_top.pack(fill="x")
+        ttk.Label(header_top, text="LOCAL OPERATOR CONSOLE", style="Eyebrow.TLabel").pack(side="left")
+        self.theme_button = ttk.Button(header_top, command=self.toggle_theme)
+        self.theme_button.pack(side="right")
+        ttk.Label(header, text="OneBot LLM Bridge", style="Title.TLabel").pack(anchor="w", pady=(3, 0))
+        subtitle = ttk.Label(
             outer,
-            text="保存配置只写入 .env.local，不会重启服务；需要应用时请手动点击“重启全部”。",
+            text="模型、QQ 通道和本地服务。保存只写配置，启动与重启都由你明确触发。",
             style="Subtitle.TLabel",
-        ).pack(anchor="w", pady=(3, 10))
+        )
+        subtitle.grid(row=1, column=0, sticky="w", pady=(4, 14))
 
-        tab_area = ttk.Frame(outer)
-        tab_area.pack(fill="both", expand=True)
+        actions = ttk.Frame(outer, style="Command.TFrame", padding=(10, 8))
+        actions.grid(row=2, column=0, sticky="ew", pady=(0, 14))
+        primary_actions = ttk.Frame(actions, style="Command.TFrame")
+        primary_actions.grid(row=0, column=0, sticky="w")
+        ttk.Button(primary_actions, text="保存配置", command=self.save_config, style="Primary.TButton").pack(side="left")
+        ttk.Button(primary_actions, text="启动全部", command=self.start_all).pack(side="left", padx=(8, 0))
+        ttk.Button(primary_actions, text="启动 NapCat", command=self.start_napcat).pack(side="left", padx=(8, 0))
+        self.diagnostics_button = ttk.Button(primary_actions, text="一键诊断", command=self.run_diagnostics)
+        self.diagnostics_button.pack(side="left", padx=(8, 0))
+        secondary_actions = ttk.Frame(actions, style="Command.TFrame")
+        secondary_actions.grid(row=0, column=1, sticky="e")
+        ttk.Button(secondary_actions, text="重启全部", command=self.restart_all).pack(side="left")
+        ttk.Button(secondary_actions, text="停止全部", command=self.stop_all, style="Danger.TButton").pack(side="left", padx=(8, 0))
+        actions.columnconfigure(1, weight=1)
+
+        tab_area = ttk.Frame(outer, style="App.TFrame")
+        tab_area.grid(row=3, column=0, sticky="nsew")
         tab_area.columnconfigure(0, weight=1)
         tab_area.rowconfigure(0, weight=1)
-        notebook = ttk.Notebook(tab_area)
+        notebook = FixedTabNotebook(tab_area, colors)
+        self.notebook = notebook
         notebook.grid(row=0, column=0, sticky="nsew")
         scrollbar = ttk.Scrollbar(
             tab_area,
@@ -257,13 +606,18 @@ class ControlPanel(tk.Tk):
         self._settings_scrollbar = scrollbar
         for canvas in self._tab_canvases:
             canvas.configure(yscrollcommand=scrollbar.set)
+        self.bind_all("<MouseWheel>", self._scroll_event, add="+")
+        self.bind_all("<Button-4>", self._scroll_event, add="+")
+        self.bind_all("<Button-5>", self._scroll_event, add="+")
+        self.bind_all("<ButtonPress-2>", self._middle_scroll_start, add="+")
+        self.bind_all("<B2-Motion>", self._middle_scroll_drag, add="+")
         notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
         notebook.add(model_tab, text="模型与识图")
         notebook.add(behavior_tab, text="回复与记忆")
         notebook.add(network_tab, text="连接与服务")
         self.settings = model_content
 
-        model = ttk.LabelFrame(self.settings, text="模型连接", padding=10)
+        model = ttk.LabelFrame(self.settings, text="模型连接", padding=14, style="Section.TLabelframe")
         model.pack(fill="x")
         model.columnconfigure(1, weight=1)
         self.preset = tk.StringVar()
@@ -272,17 +626,17 @@ class ControlPanel(tk.Tk):
         self.preset_box.grid(row=0, column=1, sticky="ew", pady=4)
         self.preset_box.bind("<<ComboboxSelected>>", self._preset_selected)
         preset_bar = ttk.Frame(model)
-        preset_bar.grid(row=0, column=2, padx=(10, 0))
-        ttk.Button(preset_bar, text="保存为新预设", command=self.save_preset).pack(side="left", padx=3)
-        ttk.Button(preset_bar, text="重命名", command=self.rename_preset).pack(side="left", padx=3)
-        ttk.Button(preset_bar, text="删除", command=self.delete_preset).pack(side="left", padx=3)
-        self.api_key = self._entry(model, 1, "API Key", "LLM_API_KEY", secret=True)
-        self.base_url = self._entry(model, 2, "Base URL", "LLM_BASE_URL")
-        self.model = self._model_entry(model, 3, "模型", "LLM_MODEL", self.detect_chat_models)
-        self.max_tokens = self._entry(model, 4, "输出预算", "LLM_MAX_TOKENS", "1024")
-        self.timeout = self._entry(model, 5, "超时秒数", "LLM_TIMEOUT_SECONDS", "60")
+        preset_bar.grid(row=1, column=1, columnspan=2, sticky="w", pady=(2, 7))
+        ttk.Button(preset_bar, text="保存为新预设", command=self.save_preset).pack(side="left", padx=(0, 6))
+        ttk.Button(preset_bar, text="重命名", command=self.rename_preset).pack(side="left", padx=(0, 6))
+        ttk.Button(preset_bar, text="删除", command=self.delete_preset, style="Danger.TButton").pack(side="left")
+        self.api_key = self._entry(model, 2, "API Key", "LLM_API_KEY", secret=True)
+        self.base_url = self._entry(model, 3, "Base URL", "LLM_BASE_URL")
+        self.model = self._model_entry(model, 4, "模型", "LLM_MODEL", self.detect_chat_models)
+        self.max_tokens = self._entry(model, 5, "输出预算", "LLM_MAX_TOKENS", "1024")
+        self.timeout = self._entry(model, 6, "超时秒数", "LLM_TIMEOUT_SECONDS", "60")
 
-        vision = ttk.LabelFrame(self.settings, text="图片识图", padding=10)
+        vision = ttk.LabelFrame(self.settings, text="图片识图", padding=14, style="Section.TLabelframe")
         vision.pack(fill="x", pady=(10, 0))
         vision.columnconfigure(1, weight=1)
         self.vision_mode = tk.StringVar(value=self._value("VISION_MODE", "off"))
@@ -293,10 +647,10 @@ class ControlPanel(tk.Tk):
         self.vision_model = self._model_entry(vision, 3, "视觉模型", "VISION_MODEL", self.detect_vision_models)
         self.vision_max_tokens = self._entry(vision, 4, "视觉输出预算", "VISION_MAX_TOKENS", "512")
         self.vision_timeout = self._entry(vision, 5, "视觉超时秒数", "VISION_TIMEOUT_SECONDS", "30")
-        ttk.Label(vision, text="separate 会先让视觉模型描述图片，再交给主聊天模型；视觉 Key 和地址留空时复用主模型。", style="Subtitle.TLabel").grid(row=6, column=0, columnspan=3, sticky="w", pady=(3, 0))
+        ttk.Label(vision, text="separate 会先描述图片，再交给主聊天模型；视觉 Key 和地址留空时复用主模型。", style="Hint.TLabel").grid(row=6, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
         self.settings = behavior_content
-        behavior = ttk.LabelFrame(self.settings, text="回复与记忆", padding=10)
+        behavior = ttk.LabelFrame(self.settings, text="回复与记忆", padding=14, style="Section.TLabelframe")
         behavior.pack(fill="x", pady=(10, 0))
         behavior.columnconfigure(1, weight=1)
         behavior.columnconfigure(3, weight=1)
@@ -313,7 +667,7 @@ class ControlPanel(tk.Tk):
         self.persona = self._entry(behavior, 7, "Persona 文件", "PERSONA_FILE", "")
 
         self.settings = network_content
-        network = ttk.LabelFrame(self.settings, text="服务与 Token", padding=10)
+        network = ttk.LabelFrame(self.settings, text="服务与 Token", padding=14, style="Section.TLabelframe")
         network.pack(fill="x", pady=(10, 0))
         network.columnconfigure(1, weight=1)
         network.columnconfigure(3, weight=1)
@@ -330,99 +684,168 @@ class ControlPanel(tk.Tk):
         ttk.Button(network, text="选择", command=lambda: self._select_path(self.napcat_qq, "选择 QQ 程序")).grid(row=7, column=2, padx=(8, 0), pady=4)
         ttk.Button(network, text="选择", command=lambda: self._select_path(self.napcat_hook, "选择 NapCat Hook")).grid(row=8, column=2, padx=(8, 0), pady=4)
 
-        actions = ttk.Frame(outer)
-        actions.pack(fill="x", pady=10)
-        ttk.Button(actions, text="保存配置（不重启）", command=self.save_config).pack(side="left")
-        ttk.Button(actions, text="启动全部", command=self.start_all).pack(side="left", padx=6)
-        ttk.Button(actions, text="启动 NapCat", command=self.start_napcat).pack(side="left", padx=6)
-        ttk.Button(actions, text="一键诊断", command=self.run_diagnostics).pack(side="left", padx=6)
-        ttk.Button(actions, text="重启全部", command=self.restart_all).pack(side="left", padx=6)
-        ttk.Button(actions, text="停止全部", command=self.stop_all).pack(side="left", padx=6)
-
-        status = ttk.LabelFrame(outer, text="状态", padding=8)
-        status.pack(fill="x")
+        status = ttk.LabelFrame(outer, text="运行状态", padding=(8, 10), style="Section.TLabelframe")
+        status.grid(row=4, column=0, sticky="ew", pady=(14, 0))
         self.bot_status = self._status(status, 0, "Bot")
         self.bridge_status = self._status(status, 1, "Bridge")
         self.vision_status = self._status(status, 2, "识图")
+        self.napcat_status = self._status(status, 3, "NapCat")
 
-        log_frame = ttk.LabelFrame(outer, text="实时日志", padding=8)
-        log_frame.pack(fill="both", expand=True, pady=(10, 0))
-        ttk.Button(log_frame, text="清空日志", command=self.clear_log).pack(anchor="e")
-        self.log = tk.Text(log_frame, height=6, wrap="none", state="disabled", font=("Cascadia Mono", 10))
+        log_shell = ttk.Frame(outer, style="Surface.TFrame", height=160)
+        log_shell.pack_propagate(False)
+        log_shell.grid(row=5, column=0, sticky="ew", pady=(14, 0))
+        log_frame = ttk.LabelFrame(log_shell, text="实时日志", padding=(10, 8), style="Section.TLabelframe")
+        log_frame.pack(fill="both", expand=True)
+        ttk.Button(log_frame, text="清空日志", command=self.clear_log).pack(anchor="e", pady=(0, 6))
+        self.log = tk.Text(
+            log_frame,
+            height=9,
+            wrap="none",
+            state="disabled",
+            font=("Cascadia Mono", 10),
+            background=self.COLORS["log"],
+            foreground=self.COLORS["text"],
+            insertbackground=self.COLORS["accent"],
+            selectbackground=self.COLORS["accent_soft"],
+            relief="flat",
+            borderwidth=0,
+            padx=10,
+            pady=8,
+        )
         self.log.pack(fill="both", expand=True)
+        self._apply_theme_styles()
+        self.after_idle(self._update_scrollbar_visibility)
 
-    def _scrollable_tab(self, notebook: ttk.Notebook) -> tuple[ttk.Frame, ttk.Frame, tk.Canvas]:
-        tab = ttk.Frame(notebook)
+    def _update_scrollbar_visibility(self, canvas: tk.Canvas | None = None) -> None:
+        if not hasattr(self, "_settings_scrollbar"):
+            return
+        target = canvas or self._active_canvas
+        if target is not self._active_canvas:
+            return
+        bbox = target.bbox("all")
+        scrollable = bool(bbox and bbox[3] - bbox[1] > target.winfo_height() + 1)
+        if scrollable:
+            self._settings_scrollbar.grid()
+        else:
+            self._settings_scrollbar.grid_remove()
+        if scrollable:
+            self._settings_scrollbar.set(*target.yview())
+
+    def _schedule_scrollbar_visibility(self, canvas: tk.Canvas | None = None) -> None:
+        if not hasattr(self, "_settings_scrollbar"):
+            return
+        target = canvas or self._active_canvas
+        if target is not self._active_canvas or self._scrollbar_visibility_job is not None:
+            return
+        self._scrollbar_visibility_job = self.after_idle(self._run_scrollbar_visibility)
+
+    def _run_scrollbar_visibility(self) -> None:
+        self._scrollbar_visibility_job = None
+        self._update_scrollbar_visibility()
+
+    def _scroll_event(self, event: tk.Event[tk.Misc]) -> str | None:
+        canvas = self._active_canvas
+        pointer_x = canvas.winfo_pointerx()
+        pointer_y = canvas.winfo_pointery()
+        inside = (
+            canvas.winfo_rootx() <= pointer_x <= canvas.winfo_rootx() + canvas.winfo_width()
+            and canvas.winfo_rooty() <= pointer_y <= canvas.winfo_rooty() + canvas.winfo_height()
+        )
+        if not inside:
+            return None
+        delta = getattr(event, "delta", 0)
+        direction = -1 if delta > 0 or getattr(event, "num", 0) == 4 else 1
+        units = max(1, abs(delta) // 120) if delta else 1
+        self._pending_scroll_units += direction * units
+        if self._scroll_job is None:
+            self._scroll_job = self.after_idle(self._flush_scroll)
+        return "break"
+
+    def _flush_scroll(self) -> None:
+        self._scroll_job = None
+        units = max(-12, min(12, self._pending_scroll_units))
+        self._pending_scroll_units = 0
+        if units:
+            self._active_canvas.yview_scroll(units, "units")
+
+    def _middle_scroll_start(self, _event: tk.Event[tk.Misc]) -> str | None:
+        canvas = self._active_canvas
+        pointer_x = canvas.winfo_pointerx()
+        pointer_y = canvas.winfo_pointery()
+        if not (
+            canvas.winfo_rootx() <= pointer_x <= canvas.winfo_rootx() + canvas.winfo_width()
+            and canvas.winfo_rooty() <= pointer_y <= canvas.winfo_rooty() + canvas.winfo_height()
+        ):
+            return None
+        canvas.scan_mark(pointer_x - canvas.winfo_rootx(), pointer_y - canvas.winfo_rooty())
+        return "break"
+
+    def _middle_scroll_drag(self, _event: tk.Event[tk.Misc]) -> str | None:
+        canvas = self._active_canvas
+        pointer_x = canvas.winfo_pointerx()
+        pointer_y = canvas.winfo_pointery()
+        canvas.scan_dragto(pointer_x - canvas.winfo_rootx(), pointer_y - canvas.winfo_rooty(), gain=1)
+        return "break"
+
+    def _scrollable_tab(self, notebook: FixedTabNotebook) -> tuple[ttk.Frame, ttk.Frame, tk.Canvas]:
+        tab = ttk.Frame(notebook.content_parent(), style="App.TFrame")
         tab.columnconfigure(0, weight=1)
         tab.rowconfigure(0, weight=1)
-        canvas = tk.Canvas(tab, highlightthickness=0, borderwidth=0)
+        canvas = tk.Canvas(tab, highlightthickness=0, borderwidth=0, background=self.COLORS["background"])
         canvas.grid(row=0, column=0, sticky="nsew")
-        content = ttk.Frame(canvas, padding=8)
+        content = ttk.Frame(canvas, padding=(0, 12, 14, 12), style="App.TFrame")
         window = canvas.create_window((0, 0), window=content, anchor="nw")
-        content.bind(
-            "<Configure>",
-            lambda _event: canvas.configure(scrollregion=canvas.bbox("all")),
-        )
-        canvas.bind(
-            "<Configure>",
-            lambda event: canvas.itemconfigure(window, width=event.width),
-        )
+        def update_region(_event: tk.Event[tk.Misc] | None = None) -> None:
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            self._schedule_scrollbar_visibility(canvas)
 
-        def scroll(event: tk.Event[tk.Misc]) -> str | None:
-            pointer_x = canvas.winfo_pointerx()
-            pointer_y = canvas.winfo_pointery()
-            inside = (
-                canvas.winfo_rootx() <= pointer_x <= canvas.winfo_rootx() + canvas.winfo_width()
-                and canvas.winfo_rooty() <= pointer_y <= canvas.winfo_rooty() + canvas.winfo_height()
-            )
-            if not inside:
-                return None
-            delta = getattr(event, "delta", 0)
-            direction = -1 if delta > 0 or getattr(event, "num", 0) == 4 else 1
-            canvas.yview_scroll(direction, "units")
-            return "break"
+        content.bind("<Configure>", update_region)
+        def resize_canvas(event: tk.Event[tk.Misc]) -> None:
+            canvas.itemconfigure(window, width=event.width)
+            self._schedule_scrollbar_visibility(canvas)
 
-        canvas.bind_all("<MouseWheel>", scroll, add="+")
-        canvas.bind_all("<Button-4>", scroll, add="+")
-        canvas.bind_all("<Button-5>", scroll, add="+")
+        canvas.bind("<Configure>", resize_canvas)
         return tab, content, canvas
 
     def _on_tab_changed(self, _event: tk.Event[tk.Misc]) -> None:
         notebook = _event.widget
         index = notebook.index(notebook.select())
         self._active_canvas = self._tab_canvases[index]
-        self._settings_scrollbar.set(*self._active_canvas.yview())
+        self._schedule_scrollbar_visibility()
 
     def _label(self, parent: ttk.Frame, row: int, column: int, text: str) -> None:
-        ttk.Label(parent, text=text).grid(row=row, column=column, sticky="w", padx=(0, 8), pady=4)
+        ttk.Label(parent, text=text, style="Form.TLabel").grid(row=row, column=column, sticky="w", padx=(0, 10), pady=5)
 
     def _entry(self, parent: ttk.Frame, row: int, label: str, key: str, default: str = "", secret: bool = False, column: int = 0) -> tk.StringVar:
         self._label(parent, row, column, label)
         variable = tk.StringVar(value=self._value(key, default))
-        ttk.Entry(parent, textvariable=variable, show="*" if secret else "").grid(row=row, column=column + 1, sticky="ew", padx=(0, 16) if column == 0 else (0, 0), pady=4)
+        ttk.Entry(parent, textvariable=variable, show="*" if secret else "").grid(row=row, column=column + 1, sticky="ew", padx=(0, 18) if column == 0 else (0, 0), pady=5)
         return variable
 
     def _model_entry(self, parent: ttk.Frame, row: int, label: str, key: str, detect: Callable[[], None]) -> tk.StringVar:
         self._label(parent, row, 0, label)
         variable = tk.StringVar(value=self._value(key))
         box = ttk.Combobox(parent, textvariable=variable, state="normal")
-        box.grid(row=row, column=1, sticky="ew", pady=4)
-        ttk.Button(parent, text="检测模型", command=detect).grid(row=row, column=2, padx=(8, 0), pady=4)
+        box.grid(row=row, column=1, sticky="ew", pady=5)
+        button = ttk.Button(parent, text="检测模型", command=detect)
+        button.grid(row=row, column=2, padx=(10, 0), pady=5)
         if key == "LLM_MODEL":
             self.model_box = box
+            self.model_detect_button = button
         else:
             self.vision_model_box = box
+            self.vision_detect_button = button
         return variable
 
     def _combo(self, parent: ttk.Frame, row: int, column: int, label: str, key: str, values: tuple[str, ...], default: str) -> tk.StringVar:
         self._label(parent, row, column, label)
         variable = tk.StringVar(value=self._value(key, default))
-        ttk.Combobox(parent, textvariable=variable, values=values, state="readonly").grid(row=row, column=column + 1, sticky="ew", padx=(0, 16) if column == 0 else (0, 0), pady=4)
+        ttk.Combobox(parent, textvariable=variable, values=values, state="readonly").grid(row=row, column=column + 1, sticky="ew", padx=(0, 18) if column == 0 else (0, 0), pady=5)
         return variable
 
     def _status(self, parent: ttk.Frame, column: int, label: str) -> ttk.Label:
         parent.columnconfigure(column, weight=1)
-        widget = ttk.Label(parent, text=f"{label}: 检查中", style="Status.TLabel")
+        widget = ttk.Label(parent, text=f"{label} · 检查中", style="StatusInfo.TLabel")
         widget.grid(row=0, column=column, sticky="ew", padx=(0, 8))
         return widget
 
@@ -525,15 +948,20 @@ class ControlPanel(tk.Tk):
 
     def _detect_models(self, kind: str) -> None:
         if kind == "chat":
-            base, key, button = self.base_url.get().strip().rstrip("/"), self.api_key.get().strip(), None
+            base, key = self.base_url.get().strip().rstrip("/"), self.api_key.get().strip()
+            button = self.model_detect_button
         else:
             base = self.vision_base_url.get().strip().rstrip("/") or self.base_url.get().strip().rstrip("/")
             key = self.vision_api_key.get().strip() or self.api_key.get().strip()
-            button = None
+            button = self.vision_detect_button
         if not base or not key:
             self._append_log(f"{kind} 模型检测需要 Base URL 和 API Key")
             return
+        if button.instate(["disabled"]):
+            return
         endpoint = f"{base}/models"
+        button.configure(text="检测中...")
+        button.state(["disabled"])
         self._append_log(f"正在检测 {kind} 模型：{endpoint}")
         threading.Thread(target=self._fetch_models, args=(kind, endpoint, key), daemon=True).start()
 
@@ -559,10 +987,17 @@ class ControlPanel(tk.Tk):
     def _models_detected(self, kind: str, models: list[str]) -> None:
         box = self.model_box if kind == "chat" else self.vision_model_box
         box.configure(values=models)
+        self._finish_model_detection(kind)
         self._append_log(f"{kind} 检测到 {len(models)} 个模型，可从下拉框选择")
 
     def _models_failed(self, kind: str, reason: str) -> None:
+        self._finish_model_detection(kind)
         self._append_log(f"{kind} 模型检测失败：{reason}；当前模型输入不会被清空")
+
+    def _finish_model_detection(self, kind: str) -> None:
+        button = self.model_detect_button if kind == "chat" else self.vision_detect_button
+        button.configure(text="检测模型")
+        button.state(["!disabled"])
 
     def start_all(self) -> None:
         if not self.save_config():
@@ -643,6 +1078,10 @@ class ControlPanel(tk.Tk):
         self._append_log(f"已启动 NapCat：{boot}")
 
     def run_diagnostics(self) -> None:
+        if self.diagnostics_button.instate(["disabled"]):
+            return
+        self.diagnostics_button.configure(text="诊断中...")
+        self.diagnostics_button.state(["disabled"])
         self._append_log("开始诊断：不会保存配置，也不会重启服务")
         values = self._current_config()
         values["BRIDGE_PORT"] = self.bridge_port.get().strip()
@@ -674,22 +1113,106 @@ class ControlPanel(tk.Tk):
                 self.after(0, lambda label=label, result=result: self._append_log(f"[通过] {label}: {result}"))
             except (HTTPError, OSError, URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
                 self.after(0, lambda label=label, exc=exc: self._append_log(f"[失败] {label}: {type(exc).__name__}: {exc}"))
-        self.after(0, lambda: self._append_log("诊断完成"))
+        self.after(0, self._diagnostics_finished)
+
+    def _diagnostics_finished(self) -> None:
+        self.diagnostics_button.configure(text="一键诊断")
+        self.diagnostics_button.state(["!disabled"])
+        self._append_log("诊断完成")
 
     def _refresh_status(self) -> None:
+        if self._status_probe_in_flight:
+            self.after(2000, self._refresh_status)
+            return
         bot_port = self._port_value(self.bot_port, 8765)
         bridge_port = self._port_value(self.bridge_port, 8766)
-        self.bot_status.configure(text="Bot: 端口无效" if bot_port is None else f"Bot: {'运行中' if port_open(bot_port) else '未运行'}")
-        self.bridge_status.configure(text="Bridge: 端口无效" if bridge_port is None else f"Bridge: {'运行中' if port_open(bridge_port) else '未运行'}")
-        self.vision_status.configure(text=f"识图: {self.vision_mode.get()} / {self.vision_model.get() or '未配置'}")
+        napcat_url = self.napcat_url.get().strip()
+        napcat_port = local_url_port(napcat_url, 3000)
+        vision_mode = self.vision_mode.get()
+        vision_model = self.vision_model.get()
+        self._status_probe_in_flight = True
+        threading.Thread(
+            target=self._probe_status_worker,
+            args=(bot_port, bridge_port, napcat_url, napcat_port, vision_mode, vision_model),
+            daemon=True,
+        ).start()
         self.after(2000, self._refresh_status)
 
+    def _probe_status_worker(
+        self,
+        bot_port: int | None,
+        bridge_port: int | None,
+        napcat_url: str,
+        napcat_port: int | None,
+        vision_mode: str,
+        vision_model: str,
+    ) -> None:
+        bot_running = bot_port is not None and port_open(bot_port)
+        bridge_running = bridge_port is not None and port_open(bridge_port)
+        napcat_running = napcat_port is not None and port_open(napcat_port)
+        self.after(
+            0,
+            lambda: self._apply_status(
+                bot_port,
+                bridge_port,
+                bot_running,
+                bridge_running,
+                napcat_url,
+                napcat_port,
+                napcat_running,
+                vision_mode,
+                vision_model,
+            ),
+        )
+
+    def _apply_status(
+        self,
+        bot_port: int | None,
+        bridge_port: int | None,
+        bot_running: bool,
+        bridge_running: bool,
+        napcat_url: str,
+        napcat_port: int | None,
+        napcat_running: bool,
+        vision_mode: str,
+        vision_model: str,
+    ) -> None:
+        self._status_probe_in_flight = False
+        self.bot_status.configure(
+            text="Bot 服务 · 运行中" if bot_running else ("Bot 服务 · 端口无效" if bot_port is None else "Bot 服务 · 未运行"),
+            style="StatusOnline.TLabel" if bot_running else "StatusOffline.TLabel",
+        )
+        self.bridge_status.configure(
+            text="Bridge · 运行中" if bridge_running else ("Bridge · 端口无效" if bridge_port is None else "Bridge · 未运行"),
+            style="StatusOnline.TLabel" if bridge_running else "StatusOffline.TLabel",
+        )
+        vision_ready = vision_mode == "off" or bool(vision_model.strip())
+        self.vision_status.configure(
+            text=f"识图 · {vision_mode} / {vision_model or '未配置'}",
+            style="StatusOnline.TLabel" if vision_ready else "StatusInfo.TLabel",
+        )
+        if not napcat_url:
+            self.napcat_status.configure(text="NapCat · 未配置", style="StatusInfo.TLabel")
+        elif napcat_port is None:
+            self.napcat_status.configure(text="NapCat · 远程地址", style="StatusInfo.TLabel")
+        else:
+            self.napcat_status.configure(
+                text=f"NapCat · {'运行中' if napcat_running else '未运行'}",
+                style="StatusOnline.TLabel" if napcat_running else "StatusOffline.TLabel",
+            )
+
     def _drain_logs(self) -> None:
-        try:
-            while True:
-                self._append_log(self.log_queue.get_nowait())
-        except queue.Empty:
-            pass
+        messages: list[str] = []
+        for _ in range(60):
+            try:
+                messages.append(self.log_queue.get_nowait())
+            except queue.Empty:
+                break
+        if messages:
+            self.log.configure(state="normal")
+            self.log.insert("end", "\n".join(messages) + "\n")
+            self.log.see("end")
+            self.log.configure(state="disabled")
         self.after(200, self._drain_logs)
 
     def _append_log(self, message: str) -> None:
