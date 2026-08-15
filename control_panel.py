@@ -228,13 +228,13 @@ class ControlPanel(tk.Tk):
 
         notebook = ttk.Notebook(outer)
         notebook.pack(fill="both", expand=True)
-        model_tab = ttk.Frame(notebook, padding=8)
-        behavior_tab = ttk.Frame(notebook, padding=8)
-        network_tab = ttk.Frame(notebook, padding=8)
+        model_tab, model_content = self._scrollable_tab(notebook)
+        behavior_tab, behavior_content = self._scrollable_tab(notebook)
+        network_tab, network_content = self._scrollable_tab(notebook)
         notebook.add(model_tab, text="模型与识图")
         notebook.add(behavior_tab, text="回复与记忆")
         notebook.add(network_tab, text="连接与服务")
-        self.settings = model_tab
+        self.settings = model_content
 
         model = ttk.LabelFrame(self.settings, text="模型连接", padding=10)
         model.pack(fill="x")
@@ -268,7 +268,7 @@ class ControlPanel(tk.Tk):
         self.vision_timeout = self._entry(vision, 5, "视觉超时秒数", "VISION_TIMEOUT_SECONDS", "30")
         ttk.Label(vision, text="separate 会先让视觉模型描述图片，再交给主聊天模型；视觉 Key 和地址留空时复用主模型。", style="Subtitle.TLabel").grid(row=6, column=0, columnspan=3, sticky="w", pady=(3, 0))
 
-        self.settings = behavior_tab
+        self.settings = behavior_content
         behavior = ttk.LabelFrame(self.settings, text="回复与记忆", padding=10)
         behavior.pack(fill="x", pady=(10, 0))
         behavior.columnconfigure(1, weight=1)
@@ -285,7 +285,7 @@ class ControlPanel(tk.Tk):
         ttk.Checkbutton(behavior, text="显示输入状态", variable=self.typing).grid(row=6, column=0, columnspan=2, sticky="w", pady=4)
         self.persona = self._entry(behavior, 7, "Persona 文件", "PERSONA_FILE", "")
 
-        self.settings = network_tab
+        self.settings = network_content
         network = ttk.LabelFrame(self.settings, text="服务与 Token", padding=10)
         network.pack(fill="x", pady=(10, 0))
         network.columnconfigure(1, weight=1)
@@ -323,6 +323,38 @@ class ControlPanel(tk.Tk):
         ttk.Button(log_frame, text="清空日志", command=self.clear_log).pack(anchor="e")
         self.log = tk.Text(log_frame, height=6, wrap="none", state="disabled", font=("Cascadia Mono", 10))
         self.log.pack(fill="both", expand=True)
+
+    def _scrollable_tab(self, notebook: ttk.Notebook) -> tuple[tk.Canvas, ttk.Frame]:
+        canvas = tk.Canvas(notebook, highlightthickness=0, borderwidth=0)
+        content = ttk.Frame(canvas, padding=8)
+        window = canvas.create_window((0, 0), window=content, anchor="nw")
+        content.bind(
+            "<Configure>",
+            lambda _event: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        canvas.bind(
+            "<Configure>",
+            lambda event: canvas.itemconfigure(window, width=event.width),
+        )
+
+        def scroll(event: tk.Event[tk.Misc]) -> str | None:
+            pointer_x = canvas.winfo_pointerx()
+            pointer_y = canvas.winfo_pointery()
+            inside = (
+                canvas.winfo_rootx() <= pointer_x <= canvas.winfo_rootx() + canvas.winfo_width()
+                and canvas.winfo_rooty() <= pointer_y <= canvas.winfo_rooty() + canvas.winfo_height()
+            )
+            if not inside:
+                return None
+            delta = getattr(event, "delta", 0)
+            direction = -1 if delta > 0 or getattr(event, "num", 0) == 4 else 1
+            canvas.yview_scroll(direction, "units")
+            return "break"
+
+        canvas.bind_all("<MouseWheel>", scroll, add="+")
+        canvas.bind_all("<Button-4>", scroll, add="+")
+        canvas.bind_all("<Button-5>", scroll, add="+")
+        return canvas, content
 
     def _label(self, parent: ttk.Frame, row: int, column: int, text: str) -> None:
         ttk.Label(parent, text=text).grid(row=row, column=column, sticky="w", padx=(0, 8), pady=4)
