@@ -42,6 +42,11 @@ OPTION_LABELS: dict[str, dict[str, str]] = {
 }
 
 
+TOOL_LABELS: dict[str, str] = {
+    "get_time": "查询当前时间",
+}
+
+
 HELP_TEXTS: dict[str, str] = {
     "MODEL_PRESET": "预设只负责快速填入模型相关字段。选中后仍可以继续修改，保存配置并启动或重启服务后才会影响正在运行的服务。",
     "LLM_API_KEY": "模型中转站或服务商提供的密钥。只保存在本机配置里，不要把它发到群里或提交到 GitHub。",
@@ -64,6 +69,7 @@ HELP_TEXTS: dict[str, str] = {
     "EMOJI_CATALOG": "表情词典路径。可以点击“编辑词典”，让模型知道“笑死”“无语”等词对应哪个 NapCat 表情 ID。",
     "ACTIVE_ENABLED": "启用后会按间隔主动给目标发消息。建议先用私聊测试，并设置较长间隔。",
     "TOOLS_ENABLED": "只允许工具白名单里的工具被模型调用。不了解工具用途时建议关闭。",
+    "TOOL_ALLOWLIST": "勾选后，模型才可以请求对应工具；没有勾选的工具即使被模型请求也不会执行。",
     "NAPCAT_API_URL": "NapCat 的 HTTP Server 地址，通常是 http://127.0.0.1:3000。控制台和 Bridge 通过它发消息。",
     "NAPCAT_ACCESS_TOKEN": "NapCat HTTP Server 的访问 Token。它和“事件上报 Token”不是同一个东西。",
     "NAPCAT_EVENT_TOKEN": "NapCat 向 Bridge 上报消息时使用的 Token，必须和 NapCat OneBot11 HTTP 上报配置一致。",
@@ -900,13 +906,12 @@ class ControlPanel(tk.Tk):
         self.active_enabled = tk.BooleanVar(value=self._value("ACTIVE_ENABLED", "false").lower() in {"1", "true", "yes", "on"})
         self._checkbutton(behavior, 7, 0, "启用定时主动消息", self.active_enabled, "ACTIVE_ENABLED")
         self.tools_enabled = tk.BooleanVar(value=self._value("TOOLS_ENABLED", "false").lower() in {"1", "true", "yes", "on"})
-        self._checkbutton(behavior, 7, 2, "启用白名单工具", self.tools_enabled, "TOOLS_ENABLED", columnspan=2)
+        self._tool_selector(behavior, 7, 2)
         self.active_interval = self._entry(behavior, 8, "主动消息间隔(分钟)", "ACTIVE_INTERVAL_MINUTES", "60")
         self.active_target_type = self._combo(behavior, 8, 2, "主动消息类型", "ACTIVE_TARGET_TYPE", ("private", "group"), "private")
         self.active_target_id = self._entry(behavior, 9, "主动消息目标", "ACTIVE_TARGET_ID", "")
         self.active_prompt = self._entry(behavior, 10, "主动消息提示", "ACTIVE_PROMPT", "")
         self.persona = self._entry(behavior, 11, "Persona 文件", "PERSONA_FILE", "")
-        self.tool_allowlist = self._entry(behavior, 12, "工具白名单", "TOOL_ALLOWLIST", "get_time", column=2)
         self.emoji_catalog = self._entry(behavior, 13, "表情词典文件", "EMOJI_CATALOG", "", column=2)
         ttk.Button(
             behavior,
@@ -1112,6 +1117,41 @@ class ControlPanel(tk.Tk):
             badge = HelpBadge(holder, self, help_text)
             badge.pack(side="left", padx=(4, 0))
             self._help_badges.append(badge)
+
+    def _tool_selector(self, parent: ttk.Frame, row: int, column: int) -> None:
+        """Render known safe tools as checkboxes and keep the env format stable."""
+        holder = ttk.Frame(parent, style="Surface.TFrame")
+        holder.grid(row=row, column=column, columnspan=2, sticky="w", pady=4)
+        ttk.Checkbutton(holder, text="启用白名单工具", variable=self.tools_enabled).pack(side="left")
+        badge = HelpBadge(holder, self, HELP_TEXTS["TOOLS_ENABLED"])
+        badge.pack(side="left", padx=(4, 10))
+        ttk.Label(holder, text="允许：", style="Hint.TLabel").pack(side="left")
+
+        configured = {
+            item.strip().lower()
+            for item in self._value("TOOL_ALLOWLIST", "get_time").split(",")
+            if item.strip()
+        }
+        self._unknown_tools = configured.difference(TOOL_LABELS)
+        self._tool_vars: dict[str, tk.BooleanVar] = {}
+        for name, label in TOOL_LABELS.items():
+            variable = tk.BooleanVar(value=name in configured)
+            self._tool_vars[name] = variable
+            ttk.Checkbutton(
+                holder,
+                text=label,
+                variable=variable,
+                command=self._sync_tool_allowlist,
+            ).pack(side="left", padx=(0, 8))
+
+        self.tool_allowlist = tk.StringVar(value="")
+        self._sync_tool_allowlist()
+        self._help_badges.append(badge)
+
+    def _sync_tool_allowlist(self) -> None:
+        selected = [name for name, variable in self._tool_vars.items() if variable.get()]
+        selected.extend(sorted(self._unknown_tools))
+        self.tool_allowlist.set(",".join(selected))
 
     def _entry(self, parent: ttk.Frame, row: int, label: str, key: str, default: str = "", secret: bool = False, column: int = 0) -> tk.StringVar:
         self._label(parent, row, column, label, key)
