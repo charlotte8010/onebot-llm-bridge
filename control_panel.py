@@ -780,7 +780,19 @@ class ControlPanel(tk.Tk):
         style.configure("StatusOnline.TLabel", background=colors["accent_soft"], foreground=colors["accent"])
         style.configure("StatusOffline.TLabel", background=colors["danger_soft"], foreground=colors["danger"])
         style.configure("StatusInfo.TLabel", background=colors["amber_soft"], foreground=colors["amber"])
-        style.configure("Panel.Vertical.TScrollbar", troughcolor=colors["input"], background=colors["border"], bordercolor=colors["input"], arrowcolor=colors["muted"])
+        style.configure(
+            "Panel.Vertical.TScrollbar",
+            width=8,
+            troughcolor=colors["input"],
+            background=colors["border"],
+            bordercolor=colors["input"],
+            arrowcolor=colors["muted"],
+            relief="flat",
+        )
+        style.map(
+            "Panel.Vertical.TScrollbar",
+            background=[("active", colors["accent"]), ("pressed", colors["accent"])],
+        )
         if hasattr(self, "log"):
             self.log.configure(background=colors["log"], foreground=colors["text"], insertbackground=colors["accent"], selectbackground=colors["accent_soft"])
         for canvas in getattr(self, "_tab_canvases", []):
@@ -879,11 +891,16 @@ class ControlPanel(tk.Tk):
         style.configure("StatusInfo.TLabel", background=colors["amber_soft"], foreground=colors["amber"], padding=(12, 10), font=("Cascadia Mono", 9))
         style.configure(
             "Panel.Vertical.TScrollbar",
-            width=12,
+            width=8,
             troughcolor=colors["input"],
             background=colors["border"],
             bordercolor=colors["input"],
             arrowcolor=colors["muted"],
+            relief="flat",
+        )
+        style.map(
+            "Panel.Vertical.TScrollbar",
+            background=[("active", colors["accent"]), ("pressed", colors["accent"])],
         )
         outer = ttk.Frame(self, padding=(24, 20, 24, 18), style="App.TFrame")
         outer.pack(fill="both", expand=True)
@@ -1370,6 +1387,9 @@ class ControlPanel(tk.Tk):
         tk.Label(sidebar, text="目录", background=colors["surface"], foreground=colors["accent"], font=("Microsoft YaHei UI", 10, "bold"), anchor="w").pack(fill="x", padx=6, pady=(2, 8))
         listbox = tk.Listbox(
             sidebar,
+            # Keep the directory selection when the document Text widget gets
+            # the focus and the user selects text on the right.
+            exportselection=False,
             activestyle="none",
             relief="flat",
             borderwidth=0,
@@ -1407,13 +1427,20 @@ class ControlPanel(tk.Tk):
             spacing3=5,
         )
         text.grid(row=1, column=0, sticky="nsew")
-        document_scrollbar = ttk.Scrollbar(document, orient="vertical", command=text.yview)
+        document_scrollbar = ttk.Scrollbar(
+            document,
+            orient="vertical",
+            command=text.yview,
+            style="Panel.Vertical.TScrollbar",
+        )
         document_scrollbar.grid(row=1, column=1, sticky="ns", padx=(10, 0))
         text.configure(yscrollcommand=document_scrollbar.set)
 
         def render(_event: tk.Event[tk.Misc] | None = None) -> None:
             selection = listbox.curselection()
-            index = selection[0] if selection else 0
+            if not selection:
+                return
+            index = selection[0]
             title, content = HELP_SECTIONS[index]
             section_title.configure(text=title)
             text.configure(state="normal")
@@ -1770,7 +1797,12 @@ class ControlPanel(tk.Tk):
             tree.heading(column, text=headings[column])
             tree.column(column, width=widths[column], minwidth=70, anchor="w")
         tree.grid(row=1, column=0, sticky="nsew")
-        scroll = ttk.Scrollbar(outer, orient="vertical", command=tree.yview)
+        scroll = ttk.Scrollbar(
+            outer,
+            orient="vertical",
+            command=tree.yview,
+            style="Panel.Vertical.TScrollbar",
+        )
         scroll.grid(row=1, column=1, sticky="ns")
         tree.configure(yscrollcommand=scroll.set)
         catalog = self._emoji_catalog_seed()
