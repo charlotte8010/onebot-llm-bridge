@@ -155,7 +155,7 @@ HTTP 上报负责让 NapCat 把 QQ 收到的消息发送给 Bridge：
 上报配置里的 Token 必须和控制台的“事件上报 Token”一致：
 
 ```dotenv
-NAPCAT_EVENT_TOKEN=HTTP 上报配置里的 Token
+NAPCAT_EVENT_TOKEN=HTTP Client 上报配置里的 Token
 ```
 
 这几个 Token 不要混用：

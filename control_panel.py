@@ -1008,7 +1008,7 @@ class ControlPanel(tk.Tk):
         network.columnconfigure(3, weight=1)
         self.napcat_url = self._entry(network, 0, "NapCat API", "NAPCAT_API_URL", DEFAULT_NAPCAT_API_URL)
         self.napcat_access = self._entry(network, 1, "NapCat Access Token", "NAPCAT_ACCESS_TOKEN", secret=True)
-        self.event_token = self._entry(network, 2, "事件上报 Token", "NAPCAT_EVENT_TOKEN", secret=True)
+        self.event_token = self._entry(network, 2, "HTTP Client Token（事件上报）", "NAPCAT_EVENT_TOKEN", secret=True)
         self.service_token = self._entry(network, 3, "Bot 服务 Token", "BOT_SERVICE_TOKEN", secret=True)
         self.bridge_port = self._entry(network, 4, "Bridge 端口", "BRIDGE_PORT", "8766")
         self.bot_port = self._entry(network, 5, "Bot 端口", "BOT_SERVICE_PORT", "8765")
