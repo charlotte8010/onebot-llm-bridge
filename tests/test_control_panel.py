@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from control_panel import HELP_SECTIONS, HELP_TEXTS, OPTION_LABELS, ControlPanel, build_napcat_command, build_napcat_nt_command, build_napcat_utf8_console_command, discover_qq_executable, generate_service_token, local_url_port, load_env_file, load_theme, parse_port, parse_model_ids, probe_models, save_env_file, save_theme, vision_status
+from control_panel import HELP_SECTIONS, HELP_TEXTS, OPTION_LABELS, ControlPanel, build_napcat_command, build_napcat_nt_command, build_napcat_utf8_console_command, discover_qq_executable, format_panel_error, generate_service_token, local_url_port, load_env_file, load_theme, parse_port, parse_model_ids, probe_models, save_env_file, save_theme, vision_status
 
 
 class ControlPanelHelperTests(unittest.TestCase):
@@ -126,6 +126,16 @@ class ControlPanelHelperTests(unittest.TestCase):
         second = generate_service_token()
         self.assertGreaterEqual(len(first), 40)
         self.assertNotEqual(first, second)
+
+    def test_panel_errors_include_reason_and_next_step(self):
+        message = format_panel_error("模型检测", "HTTP 403")
+        self.assertIn("原因：HTTP 403", message)
+        self.assertIn("建议：", message)
+        self.assertIn("API Key 权限", message)
+
+    def test_panel_errors_explain_local_connection_failures(self):
+        message = format_panel_error("诊断 · Bridge", "[WinError 10061] connection refused")
+        self.assertIn("目标端口没有服务在监听", message)
 
     def test_probe_models_uses_bearer_key_and_counts_models(self):
         class Response:

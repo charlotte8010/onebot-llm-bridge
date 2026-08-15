@@ -27,7 +27,7 @@ THEME_FILE = ROOT / ".control_panel_theme.json"
 BOT_SCRIPT = ROOT / "bot_service.py"
 BRIDGE_SCRIPT = ROOT / "app.py"
 DEFAULT_NAPCAT_API_URL = "http://127.0.0.1:3000"
-DEFAULT_WINDOW_GEOMETRY = "1040x860"
+DEFAULT_WINDOW_GEOMETRY = "1180x980"
 
 
 def vision_status(mode: str, model: str) -> tuple[str, bool]:
@@ -379,6 +379,41 @@ def missing_vision_config() -> str:
     raise ValueError("识图 API Key 或 Base URL 未填写")
 
 
+def format_panel_error(stage: str, error: BaseException | str) -> str:
+    """Turn a technical failure into a compact, actionable console message."""
+    if isinstance(error, HTTPError):
+        reason = f"HTTP {error.code} {error.reason or ''}".strip()
+    elif isinstance(error, URLError):
+        reason = f"网络连接失败：{error.reason}"
+    elif isinstance(error, json.JSONDecodeError):
+        reason = "服务返回的内容不是有效 JSON"
+    elif isinstance(error, TimeoutError):
+        reason = "请求超时，服务在限定时间内没有返回"
+    else:
+        reason = str(error).strip() or type(error).__name__
+
+    lowered = reason.lower()
+    if "401" in lowered or "unauthorized" in lowered:
+        advice = "认证信息不正确或已失效。检查对应服务的 Token/API Key，并确认没有把 NapCat、事件上报和 Bot Token 混用。"
+    elif "403" in lowered or "forbidden" in lowered:
+        advice = "服务拒绝了请求。检查 API Key 权限、接口地址和中转站是否允许这个接口；/models 被禁用时可以手动填写模型名。"
+    elif "404" in lowered or "not found" in lowered:
+        advice = "接口地址或路径不对。检查 Base URL 是否应该包含 /v1，端口是否正确，以及目标服务是否真的提供这个接口。"
+    elif "timed out" in lowered or "timeout" in lowered or "超时" in lowered:
+        advice = "服务响应太慢或网络不通。先确认服务已启动，再检查代理、网络和超时秒数；思考模型可以适当提高超时。"
+    elif "refused" in lowered or "10061" in lowered or "连接失败" in lowered:
+        advice = "目标端口没有服务在监听。检查对应服务是否启动，以及控制台端口和 NapCat 的上报地址是否一致。"
+    elif "json" in lowered or "decode" in lowered:
+        advice = "收到的不是接口约定的 JSON，常见原因是 URL 填到了网页地址、被代理返回了错误页面，或接口格式不兼容。"
+    elif "supabase" in stage.lower():
+        advice = "检查 Supabase URL、Secret Key、Bot QQ 和数据库迁移是否正确执行。"
+    elif "配置" in stage or "persona" in stage.lower() or "词典" in stage:
+        advice = "检查输入格式、文件路径和文件权限；修改后再保存一次。"
+    else:
+        advice = "先看这条错误前后的日志，确认是哪一个服务、端口或配置项失败，再按上面的原因排查。"
+    return f"[失败] {stage}\n原因：{reason}\n建议：{advice}"
+
+
 def _json_request(request: Request, timeout: float = 6.0) -> dict[str, object]:
     with urlopen(request, timeout=timeout) as response:
         payload = json.loads(response.read().decode("utf-8"))
@@ -525,17 +560,22 @@ class ServiceProcess:
         self.log.put(f"[{self.name}] 正在启动 {self.script.name}")
         child_env = dict(env)
         child_env["PYTHONUNBUFFERED"] = "1"
-        self.process = subprocess.Popen(
-            [sys.executable, "-u", str(self.script)],
-            cwd=ROOT,
-            env=child_env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
-        )
+        try:
+            self.process = subprocess.Popen(
+                [sys.executable, "-u", str(self.script)],
+                cwd=ROOT,
+                env=child_env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+            )
+        except OSError as exc:
+            self.process = None
+            self.log.put(format_panel_error(f"{self.name} 服务启动", exc))
+            return
         threading.Thread(target=self._read_output, daemon=True).start()
 
     def _read_output(self) -> None:
@@ -1296,12 +1336,15 @@ class ControlPanel(tk.Tk):
         self.vision_status = self._status(status, 2, "识图")
         self.napcat_status = self._status(status, 3, "NapCat")
 
-        log_shell = ttk.Frame(outer, style="Surface.TFrame", height=160)
+        log_shell = ttk.Frame(outer, style="Surface.TFrame", height=270)
         log_shell.pack_propagate(False)
-        log_shell.grid(row=5, column=0, sticky="ew", pady=(14, 0))
-        log_frame = ttk.LabelFrame(log_shell, text="实时日志", padding=(10, 8), style="Section.TLabelframe")
+        log_shell.grid(row=5, column=0, sticky="nsew", pady=(14, 0))
+        log_header = ttk.Frame(log_shell, style="Surface.TFrame")
+        log_header.pack(fill="x", pady=(0, 6))
+        ttk.Label(log_header, text="实时日志", style="Section.TLabelframe.Label").pack(side="left")
+        ttk.Button(log_header, text="清空日志", command=self.clear_log).pack(side="right")
+        log_frame = ttk.LabelFrame(log_shell, text="", padding=(10, 8), style="Section.TLabelframe")
         log_frame.pack(fill="both", expand=True)
-        ttk.Button(log_frame, text="清空日志", command=self.clear_log).pack(anchor="e", pady=(0, 6))
         self.log = tk.Text(
             log_frame,
             height=9,
@@ -1715,9 +1758,15 @@ class ControlPanel(tk.Tk):
             if values.get("SUPABASE_URL") and not values.get("BOT_QQ", "").isdigit():
                 raise ValueError("BOT_QQ is required when Supabase memory is enabled")
         except ValueError as exc:
+            self._append_log(format_panel_error("保存配置", exc))
             messagebox.showwarning("配置无效", str(exc), parent=self)
             return False
-        save_env_file(ENV_FILE, values)
+        try:
+            save_env_file(ENV_FILE, values)
+        except OSError as exc:
+            self._append_log(format_panel_error("保存配置", exc))
+            messagebox.showerror("配置保存失败", str(exc), parent=self)
+            return False
         self.values = values
         self._append_log(f"配置已保存到 {ENV_FILE}；服务保持当前状态，未自动重启")
         return True
@@ -1784,7 +1833,12 @@ class ControlPanel(tk.Tk):
             key = self.vision_api_key.get().strip() or self.api_key.get().strip()
             button = self.vision_detect_button
         if not base or not key:
-            self._append_log(f"{kind} 模型检测需要 Base URL 和 API Key")
+            self._append_log(
+                format_panel_error(
+                    f"{kind} 模型检测",
+                    "Base URL 或 API Key 为空；请求没有发出",
+                )
+            )
             return
         if button.instate(["disabled"]):
             return
@@ -1809,9 +1863,9 @@ class ControlPanel(tk.Tk):
                 raise ValueError("/models 没有返回 data[].id")
             self.after(0, lambda: self._models_detected(kind, models))
         except HTTPError as exc:
-            self.after(0, lambda: self._models_failed(kind, f"HTTP {exc.code}"))
+            self.after(0, lambda error=exc: self._models_failed(kind, error))
         except (OSError, URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
-            self.after(0, lambda: self._models_failed(kind, str(exc)))
+            self.after(0, lambda error=exc: self._models_failed(kind, error))
 
     def _models_detected(self, kind: str, models: list[str]) -> None:
         box = self.model_box if kind == "chat" else self.vision_model_box
@@ -1819,9 +1873,10 @@ class ControlPanel(tk.Tk):
         self._finish_model_detection(kind)
         self._append_log(f"{kind} 检测到 {len(models)} 个模型，可从下拉框选择")
 
-    def _models_failed(self, kind: str, reason: str) -> None:
+    def _models_failed(self, kind: str, reason: BaseException | str) -> None:
         self._finish_model_detection(kind)
-        self._append_log(f"{kind} 模型检测失败：{reason}；当前模型输入不会被清空")
+        self._append_log(format_panel_error(f"{kind} 模型检测", reason))
+        self._append_log("当前模型输入不会被清空；可以修正地址或密钥后重新检测")
 
     def _finish_model_detection(self, kind: str) -> None:
         button = self.model_detect_button if kind == "chat" else self.vision_detect_button
@@ -1835,7 +1890,7 @@ class ControlPanel(tk.Tk):
         bot_port = self._port_value(self.bot_port, 8765)
         bridge_port = self._port_value(self.bridge_port, 8766)
         if bot_port is None or bridge_port is None:
-            self._append_log("端口无效，请填写 1 到 65535 之间的数字")
+            self._append_log(format_panel_error("启动全部 · 端口配置", "Bot 或 Bridge 端口无效"))
             return
         if not port_open(bot_port):
             self.bot.start(env)
@@ -2048,6 +2103,7 @@ class ControlPanel(tk.Tk):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             except OSError as exc:
+                self._append_log(format_panel_error("表情词典保存", exc))
                 messagebox.showerror("保存失败", str(exc), parent=dialog)
                 return
             self.emoji_catalog.set(raw_path)
@@ -2073,6 +2129,7 @@ class ControlPanel(tk.Tk):
         try:
             content = path.read_text(encoding="utf-8") if path.is_file() else ""
         except (OSError, UnicodeError) as exc:
+            self._append_log(format_panel_error("读取 Persona", exc))
             messagebox.showerror("读取 Persona 失败", str(exc), parent=self)
             return
         dialog = tk.Toplevel(self)
@@ -2112,6 +2169,7 @@ class ControlPanel(tk.Tk):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(text.get("1.0", "end-1c"), encoding="utf-8")
             except OSError as exc:
+                self._append_log(format_panel_error("Persona 保存", exc))
                 messagebox.showerror("保存失败", str(exc), parent=dialog)
                 return
             self.persona.set(raw_path)
@@ -2145,6 +2203,12 @@ class ControlPanel(tk.Tk):
         launcher_mode = Path(boot).suffix.lower() in {".bat", ".cmd"}
         paths = [boot] if launcher_mode else [boot, qq, hook]
         if not all(paths):
+            self._append_log(
+                format_panel_error(
+                    "NapCat 启动配置",
+                    "NapCat 启动程序、QQ 程序或 Hook 路径未填写",
+                )
+            )
             messagebox.showwarning(
                 "NapCat 路径未配置",
                 "请先填写 NapCat 启动程序、QQ 程序和 Hook 路径。\n"
@@ -2155,6 +2219,7 @@ class ControlPanel(tk.Tk):
             return
         missing = [path for path in paths if not Path(path).is_file()]
         if missing:
+            self._append_log(format_panel_error("NapCat 启动配置", "文件不存在：" + ", ".join(missing)))
             messagebox.showwarning(
                 "NapCat 文件不存在",
                 "下面的路径找不到：\n\n" + "\n".join(missing),
@@ -2185,10 +2250,15 @@ class ControlPanel(tk.Tk):
                     }
                 )
                 load_path = boot_path.parent / "loadNapCat.js"
-                load_path.write_text(
-                    f'(async () => {{await import("file:///{main_path.as_posix().lstrip("/")}")}})()\n',
-                    encoding="utf-8",
-                )
+                try:
+                    load_path.write_text(
+                        f'(async () => {{await import("file:///{main_path.as_posix().lstrip("/")}")}})()\n',
+                        encoding="utf-8",
+                    )
+                except OSError as exc:
+                    self._append_log(format_panel_error("NapCat 启动文件准备", exc))
+                    messagebox.showerror("NapCat 启动失败", str(exc), parent=self)
+                    return
                 self._append_log(f"launcher 已自动选择 QQNT：{command_qq}")
             else:
                 command = build_napcat_command(command_boot, command_qq, command_hook)
@@ -2203,6 +2273,7 @@ class ControlPanel(tk.Tk):
                 creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
             )
         except OSError as exc:
+            self._append_log(format_panel_error("NapCat 启动", exc))
             messagebox.showerror("NapCat 启动失败", str(exc), parent=self)
             return
         self._append_log(f"已启动 NapCat：{boot_path}")
@@ -2242,7 +2313,9 @@ class ControlPanel(tk.Tk):
                 result = check()
                 self.after(0, lambda label=label, result=result: self._append_log(f"[通过] {label}: {result}"))
             except (HTTPError, OSError, URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
-                self.after(0, lambda label=label, exc=exc: self._append_log(f"[失败] {label}: {type(exc).__name__}: {exc}"))
+                self.after(0, lambda label=label, error=exc: self._append_log(format_panel_error(f"诊断 · {label}", error)))
+            except Exception as exc:
+                self.after(0, lambda label=label, error=exc: self._append_log(format_panel_error(f"诊断 · {label}", error)))
         self.after(0, self._diagnostics_finished)
 
     def _diagnostics_finished(self) -> None:
