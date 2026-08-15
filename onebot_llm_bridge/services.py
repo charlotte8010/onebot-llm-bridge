@@ -638,7 +638,7 @@ class Bridge:
         try:
             self.remote_memory.ingest(message)
         except RemoteMemoryError as exc:
-            print(f"remote memory ingest failed: {exc.code}")
+            print(f"remote memory ingest failed: {exc.code}: {exc}")
 
     def _set_typing(self, user_id: str, active: bool) -> None:
         if not self.settings.typing_status or not hasattr(self.napcat, "set_input_status"):
@@ -719,7 +719,7 @@ class Bridge:
                     remote_facts.extend(self.remote_memory.load_facts(f"user:{first.sender_id}"))
                     remote_facts.extend(self.remote_memory.load_facts(f"conversation:{first.conversation_key}"))
                 except RemoteMemoryError as exc:
-                    print(f"remote memory context failed: {exc.code}")
+                    print(f"remote memory context failed: {exc.code}: {exc}")
             local_facts = self.memory_store.load_facts(f"user:{first.sender_id}") if self.memory_store else []
             payload = {
                 "message": "\n".join(item.text for item in messages if item.text),
@@ -840,7 +840,7 @@ class Bridge:
                 try:
                     self.remote_memory.add_fact(scope, fact, message.message_id)
                 except RemoteMemoryError as exc:
-                    print(f"remote memory fact write failed: {exc.code}")
+                    print(f"remote memory fact write failed: {exc.code}: {exc}")
             acknowledgement = "记住了"
         else:
             removed = False
@@ -851,7 +851,7 @@ class Bridge:
                 try:
                     removed = self.remote_memory.remove_fact(scope, fact) or removed
                 except RemoteMemoryError as exc:
-                    print(f"remote memory fact delete failed: {exc.code}")
+                    print(f"remote memory fact delete failed: {exc.code}: {exc}")
             acknowledgement = "忘掉了" if removed else "我没有记过这个"
         if message.conversation_type == "private":
             self.napcat.send_private(message.conversation_id, acknowledgement)

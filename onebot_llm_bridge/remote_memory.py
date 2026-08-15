@@ -72,7 +72,18 @@ class SupabaseRestClient:
                 code = "rate_limited"
             elif exc.code >= 500:
                 code = "server_error"
-            raise RemoteMemoryError(code, f"remote memory returned HTTP {exc.code}") from exc
+            detail = ""
+            try:
+                error_payload = json.loads(exc.read().decode("utf-8"))
+                if isinstance(error_payload, Mapping):
+                    detail = str(error_payload.get("message", "")).strip()
+            except (UnicodeDecodeError, json.JSONDecodeError, OSError):
+                pass
+            if exc.code == 404 and "bridge_" in detail:
+                code = "schema_missing"
+                detail = "Supabase 表不存在，请先执行项目中的迁移 SQL"
+            suffix = f": {detail}" if detail else ""
+            raise RemoteMemoryError(code, f"remote memory returned HTTP {exc.code}{suffix}") from exc
         except (HTTPException, URLError, TimeoutError, ConnectionError, OSError, ssl.SSLError) as exc:
             raise RemoteMemoryError("network_error", "remote memory request failed") from exc
         try:
