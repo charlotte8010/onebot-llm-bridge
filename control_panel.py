@@ -797,9 +797,11 @@ class ControlPanel(tk.Tk):
         style.configure(
             "Panel.Vertical.TScrollbar",
             width=8,
-            troughcolor=colors["input"],
-            background=colors["border"],
-            bordercolor=colors["input"],
+            troughcolor=colors["surface_alt"],
+            background=colors["muted"],
+            bordercolor=colors["surface_alt"],
+            lightcolor=colors["muted"],
+            darkcolor=colors["muted"],
             arrowcolor=colors["muted"],
             relief="flat",
         )
@@ -968,9 +970,11 @@ class ControlPanel(tk.Tk):
         style.configure(
             "Panel.Vertical.TScrollbar",
             width=8,
-            troughcolor=colors["input"],
-            background=colors["border"],
-            bordercolor=colors["input"],
+            troughcolor=colors["surface_alt"],
+            background=colors["muted"],
+            bordercolor=colors["surface_alt"],
+            lightcolor=colors["muted"],
+            darkcolor=colors["muted"],
             arrowcolor=colors["muted"],
             relief="flat",
         )
