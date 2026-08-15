@@ -226,7 +226,11 @@ class BotService:
             "[[REACTION:emoji_name]] using one of the catalog names below."
         )
         if str(payload.get("conversation", "")).startswith("private:"):
-            system += " This is a private chat: one bubble is the default, and two bubbles need two genuinely separate thoughts."
+            system += (
+                " This is a private chat: choose naturally between one, two, or occasionally three bubbles. "
+                "Use one bubble with spaces or punctuation when the thoughts belong together; use [[BUBBLE]] "
+                "only for genuinely separate reactions or beats. Do not force one fixed bubble count."
+            )
         if self.emoji_catalog:
             system += "\nAllowed reaction catalog:\n" + json.dumps(
                 catalog_for_prompt(self.emoji_catalog), ensure_ascii=False
