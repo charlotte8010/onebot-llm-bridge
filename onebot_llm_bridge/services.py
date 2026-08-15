@@ -1013,8 +1013,14 @@ class BridgeHandler(JsonHandler):
             self.write_json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "unauthorized"})
             return
         try:
-            result = server.bridge.enqueue_event(self.parse_json_body(body))
+            event = self.parse_json_body(body)
+            result = server.bridge.enqueue_event(event)
         except (EventError, ValueError) as exc:
+            print(
+                "[bridge] event rejected: "
+                f"{type(exc).__name__}: {exc}; "
+                f"keys={','.join(sorted(event)) if 'event' in locals() else '<invalid-json>'}"
+            )
             self.write_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
             return
         except (NapCatError, RuntimeError) as exc:
