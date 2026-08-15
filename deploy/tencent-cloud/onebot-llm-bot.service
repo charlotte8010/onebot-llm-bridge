@@ -1,0 +1,19 @@
+[Unit]
+Description=OneBot LLM Bridge Bot Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=onebot
+Group=onebot
+WorkingDirectory=/opt/onebot-llm-bridge
+EnvironmentFile=/etc/onebot-llm-bridge/bot.env
+ExecStart=/opt/onebot-llm-bridge/.venv/bin/python /opt/onebot-llm-bridge/bot_service.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

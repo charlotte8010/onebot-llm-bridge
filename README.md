@@ -39,6 +39,14 @@ QQ 消息
 | Bot service | 8765 | 调用模型并返回回复 |
 | Bridge HTTP 上报入口 | 8766 | NapCat 把收到的 QQ 消息上报到这里 |
 
+## 腾讯云部署
+
+如果希望本地电脑关机后仍然能用，不能只搬 `bot_service.py`：QQ 登录和收发消息仍由 NapCat 完成。完整方案是在腾讯云 Windows 云服务器上一起运行 QQNT、NapCat、Bridge 和 Bot service；本地电脑只需要偶尔用远程桌面维护。
+
+项目也支持拆分部署：本地保留 QQ/NapCat/Bridge，腾讯云只运行 Bot service。控制台“连接与服务”中的“Bot 服务地址”填云服务器的内网或 Tailscale 地址，远程时“启动全部”会跳过本地 Bot，只启动本地 Bridge。这个模式下本地电脑仍然必须开机，适合先试通云端模型服务。
+
+完整步骤、Windows 云服务器和 Linux 云服务器两种方案见 [`deploy/tencent-cloud/README.md`](deploy/tencent-cloud/README.md)。推荐使用 Tailscale、ZeroTier 或 SSH 隧道连接，不要把带 Token 的 HTTP 8765 端口直接暴露在公网。
+
 ## 快速开始
 
 ### 1. 准备环境

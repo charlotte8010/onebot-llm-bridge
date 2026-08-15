@@ -265,7 +265,8 @@ NAPCAT_EVENT_TOKEN=replace-me
 BRIDGE_HOST=127.0.0.1
 BRIDGE_PORT=8766
 
-BOT_SERVICE_URL=http://127.0.0.1:8765
+BOT_SERVICE_HOST=127.0.0.1
+BOT_SERVICE_PORT=8765
 BOT_SERVICE_TOKEN=replace-me
 
 GROUP_MODE=mention
@@ -277,6 +278,8 @@ PERSONA_FILE=./.local/persona_prompt.txt
 MEMORY_BACKEND=sqlite
 MEMORY_DB=./.local/memory.sqlite3
 ```
+
+Bot service 支持拆分到另一台机器：Bridge 使用 `BOT_SERVICE_HOST` 和 `BOT_SERVICE_PORT` 请求远端 `/reply`、`/decide` 和 `/summarize`。控制台检测到地址不是本机回环地址时，不会误启动本地 Bot。公网部署必须使用私网、VPN、SSH 隧道或 HTTPS 反向代理，不能把明文 HTTP Token 直接暴露到公网。
 
 配置加载顺序要固定并写入文档：命令行参数 > `.env.local` > `.env` > 默认值。启动时打印配置摘要，但永远不打印完整 Key、Token、Cookie 或 Secret。
 

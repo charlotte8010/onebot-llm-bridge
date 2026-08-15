@@ -98,6 +98,7 @@ HELP_TEXTS: dict[str, str] = {
     "NAPCAT_ACCESS_TOKEN": "NapCat HTTP Server 的访问 Token。它和“事件上报 Token”不是同一个东西。",
     "NAPCAT_EVENT_TOKEN": "去 NapCat WebUI → 网络配置 → OneBot11 → HTTP 上报服务（HTTP Client），打开上报到 8766/onebot 的配置，复制其中的 Token 到这里。它不是 3000 的 NapCat API Token，也不是 Bot 服务 Token。",
     "BOT_SERVICE_TOKEN": "这个 Token 不在 NapCat 里。它由本项目的 Bot 服务（8765）和 Bridge 共用；可以手动填写或点击“生成”。生成后还要保存配置并重启 Bot 与 Bridge。",
+    "BOT_SERVICE_HOST": "Bot 服务地址。单机运行填 127.0.0.1；Bot 放在腾讯云时填云服务器的内网或 Tailscale 地址，只填主机名/IP，不要填 http://、路径或 /reply。公网直连建议先配置 HTTPS，不要用裸 HTTP 传 Token。",
     "BRIDGE_PORT": "Bridge 接收 NapCat 事件的端口，默认 8766。",
     "BOT_SERVICE_PORT": "Bot 服务提供模型回复的端口，默认 8765。",
     "NAPCAT_BOOT": "NapCat 启动程序路径。填写 launcher.bat 时只启动 launcher，由它自己查找 QQ；只有直接填写 NapCatWinBootMain.exe 时才需要 QQ 和 Hook。",
@@ -130,7 +131,7 @@ HELP_SECTIONS: tuple[tuple[str, str], ...] = (
 2. 在 NapCat WebUI 的“网络配置 → OneBot11”里配置 HTTP Server：地址保持 127.0.0.1，端口保持 3000，并记下它的 Token。控制台“连接与服务”里的 NapCat API 和 NapCat Access Token 要与它一致。
 3. 同一个页面配置 HTTP Client：目标地址填 http://127.0.0.1:8766/onebot，并记下 HTTP Client 的 Token。这个 Token 填到控制台的“事件上报 Token”。
 4. 回到控制台“模型与识图”，填写 API Key 和 Base URL，点击“检测模型”，再选择模型。
-5. 在“连接与服务”确认 Bridge 端口是 8766、Bot 端口是 8765。第一次可以先不要配置 Supabase、主动消息和工具。
+5. 在“连接与服务”确认 Bridge 端口是 8766、Bot 服务地址是 127.0.0.1、Bot 端口是 8765。只有使用云端 Bot 时，才把地址改成云服务器的私网或 Tailscale 地址；这时控制台不会在本地启动 Bot。第一次可以先不要配置 Supabase、主动消息和工具。
 6. 点击“保存配置”。保存只写入本地配置，不会自动重启任何服务。
 7. 点击“启动全部”启动 Bot 和 Bridge；NapCat 可以用“启动 NapCat”启动，也可以继续使用你原来的 launcher。
 8. 先给自己的 QQ 私聊发送“1”。看到 NapCat 收到消息、Bridge 有日志、Bot 有 /reply 请求，最后 QQ 收到回复，说明基础链路成功。
@@ -256,7 +257,7 @@ NapCat WebUI 的配置路径：网络配置 → OneBot11。HTTP Server 和 HTTP 
 
 服务按钮：
 • “保存配置”：只写入本地配置，不启动、不停止、不重启任何服务。
-• “启动全部”：启动 Bot 和 Bridge；已经占用端口时不会重复启动。
+• “启动全部”：本机地址时启动 Bot 和 Bridge；Bot 服务地址填写云端时，会跳过本地 Bot，只启动本地 Bridge，并在日志里写明原因。
 • “启动 NapCat”：可以填写 launcher.bat，让 NapCat 自己查找 QQ；也可以填写 NapCatWinBootMain.exe、QQ.exe 和 Hook。
 • “一键诊断”：只检查服务、端口、Token 和模型接口，不保存配置，也不会重启。
 • “重启全部”：停止并重新启动控制台启动的 Bot 和 Bridge。
@@ -407,6 +408,22 @@ def local_url_port(raw_url: str, default: int | None = None) -> int | None:
     if parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
         return None
     return parsed.port or default
+
+
+def is_local_service_host(raw_host: str) -> bool:
+    """Whether a configured Bot host points back to this computer."""
+    value = raw_host.strip().lower().strip("[]")
+    return value in {"127.0.0.1", "localhost", "::1"}
+
+
+def service_base_url(raw_host: str, port: int) -> str:
+    """Build the HTTP URL used by the control panel to probe a Bot service."""
+    host = raw_host.strip()
+    if not host or "://" in host or "/" in host:
+        raise ValueError("Bot 服务地址只能填写主机名或 IP，不要带协议和路径")
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    return f"http://{host}:{port}"
 
 
 def missing_vision_config() -> str:
@@ -1355,6 +1372,7 @@ class ControlPanel(tk.Tk):
         self.service_token = self._entry(network, 3, "Bot 服务 Token", "BOT_SERVICE_TOKEN", secret=True)
         ttk.Button(network, text="生成", command=self.generate_bot_token).grid(row=3, column=2, padx=(8, 0), pady=4)
         self.bridge_port = self._entry(network, 4, "Bridge 端口", "BRIDGE_PORT", "8766")
+        self.bot_host = self._entry(network, 4, "Bot 服务地址", "BOT_SERVICE_HOST", "127.0.0.1", column=2)
         self.bot_port = self._entry(network, 5, "Bot 端口", "BOT_SERVICE_PORT", "8765")
         self.napcat_boot = self._entry(network, 6, "NapCat 启动程序", "NAPCAT_BOOT")
         self.napcat_qq = self._entry(network, 7, "QQ 程序", "NAPCAT_QQ")
@@ -1763,7 +1781,7 @@ class ControlPanel(tk.Tk):
             "EMOJI_CATALOG": self.emoji_catalog.get().strip(),
             "TYPING_STATUS": "true" if self.typing.get() else "false", "PERSONA_FILE": self.persona.get().strip(),
             "NAPCAT_API_URL": self.napcat_url.get().strip(), "NAPCAT_ACCESS_TOKEN": self.napcat_access.get().strip(), "NAPCAT_EVENT_TOKEN": self.event_token.get().strip(),
-            "BOT_SERVICE_TOKEN": self.service_token.get().strip(), "BRIDGE_PORT": self.bridge_port.get().strip(), "BOT_SERVICE_PORT": self.bot_port.get().strip(),
+            "BOT_SERVICE_TOKEN": self.service_token.get().strip(), "BOT_SERVICE_HOST": self.bot_host.get().strip(), "BRIDGE_PORT": self.bridge_port.get().strip(), "BOT_SERVICE_PORT": self.bot_port.get().strip(),
             "NAPCAT_BOOT": self.napcat_boot.get().strip(), "NAPCAT_QQ": self.napcat_qq.get().strip(), "NAPCAT_HOOK": self.napcat_hook.get().strip(),
             "SUPABASE_URL": self.supabase_url.get().strip(), "SUPABASE_SECRET_KEY": self.supabase_key.get().strip(),
             "SUPABASE_TIMEOUT_SECONDS": self.supabase_timeout.get().strip(), "REMOTE_MEMORY_MODE": self.remote_memory_mode.get().strip(),
@@ -1793,6 +1811,7 @@ class ControlPanel(tk.Tk):
                 port = int(values.get(key, ""))
                 if not 1 <= port <= 65535:
                     raise ValueError(f"{key} must be between 1 and 65535")
+            service_base_url(values.get("BOT_SERVICE_HOST", "127.0.0.1"), int(values.get("BOT_SERVICE_PORT", "8765")))
             if values.get("DECISION_MODE", "heuristic") not in {"heuristic", "model"}:
                 raise ValueError("DECISION_MODE must be heuristic or model")
             if bool(values.get("SUPABASE_URL")) != bool(values.get("SUPABASE_SECRET_KEY")):
@@ -1973,8 +1992,11 @@ class ControlPanel(tk.Tk):
         if bot_port is None or bridge_port is None:
             self._append_log(format_panel_error("启动全部 · 端口配置", "Bot 或 Bridge 端口无效"))
             return
-        if not port_open(bot_port):
+        bot_host = self.bot_host.get().strip() or "127.0.0.1"
+        if is_local_service_host(bot_host) and not port_open(bot_port):
             self.bot.start(env)
+        elif not is_local_service_host(bot_host):
+            self._append_log(f"Bot 服务地址为远程 {bot_host}:{bot_port}，跳过本地 Bot 启动；请确认腾讯云上的 bot_service.py 已运行")
         else:
             self._append_log("Bot 端口已被占用，未重复启动")
         if not port_open(bridge_port):
@@ -1989,7 +2011,7 @@ class ControlPanel(tk.Tk):
     def stop_all(self) -> None:
         self.bot.stop()
         self.bridge.stop()
-        self._append_log("已停止控制台启动的 Bot 和 Bridge")
+        self._append_log("已停止控制台启动的 Bot 和 Bridge；远程 Bot 不会被此按钮停止")
 
     @staticmethod
     def _port_value(variable: tk.StringVar, default: int) -> int | None:
@@ -2369,6 +2391,7 @@ class ControlPanel(tk.Tk):
         generation = self._diagnostics_generation
         values = self._current_config()
         values["BRIDGE_PORT"] = self.bridge_port.get().strip()
+        values["BOT_SERVICE_HOST"] = self.bot_host.get().strip()
         values["BOT_SERVICE_PORT"] = self.bot_port.get().strip()
         self._diagnostics_timeout_job = self.after(30000, self._diagnostics_timeout)
         threading.Thread(target=self._diagnostics_worker, args=(values, generation), daemon=True).start()
@@ -2376,10 +2399,11 @@ class ControlPanel(tk.Tk):
     def _diagnostics_worker(self, values: dict[str, str], generation: int) -> None:
         try:
             checks: list[tuple[str, Callable[[], str]]] = []
+            bot_host = values.get("BOT_SERVICE_HOST", "127.0.0.1").strip() or "127.0.0.1"
             bot_port = parse_port(values.get("BOT_SERVICE_PORT", ""), 8765)
             bridge_port = parse_port(values.get("BRIDGE_PORT", ""), 8766)
             if bot_port is not None:
-                checks.append(("Bot service", lambda: probe_service(f"http://127.0.0.1:{bot_port}", values.get("BOT_SERVICE_TOKEN", ""))))
+                checks.append(("Bot service", lambda: probe_service(service_base_url(bot_host, bot_port), values.get("BOT_SERVICE_TOKEN", ""))))
             if bridge_port is not None:
                 checks.append(("Bridge", lambda: probe_service(f"http://127.0.0.1:{bridge_port}")))
             napcat_url = values.get("NAPCAT_API_URL", "")
@@ -2435,31 +2459,45 @@ class ControlPanel(tk.Tk):
             self.after(2000, self._refresh_status)
             return
         bot_port = self._port_value(self.bot_port, 8765)
+        bot_host = self.bot_host.get().strip() or "127.0.0.1"
         bridge_port = self._port_value(self.bridge_port, 8766)
         napcat_url = self.napcat_url.get().strip()
         napcat_port = local_url_port(napcat_url, 3000)
         vision_mode = self.vision_mode.get()
         vision_model = self.vision_model.get()
         napcat_access_token = self.napcat_access.get().strip()
+        bot_service_token = self.service_token.get().strip()
         self._status_probe_in_flight = True
         threading.Thread(
             target=self._probe_status_worker,
-            args=(bot_port, bridge_port, napcat_url, napcat_port, napcat_access_token, vision_mode, vision_model),
+            args=(bot_host, bot_port, bridge_port, napcat_url, napcat_port, napcat_access_token, bot_service_token, vision_mode, vision_model),
             daemon=True,
         ).start()
         self.after(2000, self._refresh_status)
 
     def _probe_status_worker(
         self,
+        bot_host: str,
         bot_port: int | None,
         bridge_port: int | None,
         napcat_url: str,
         napcat_port: int | None,
         napcat_access_token: str,
+        bot_service_token: str,
         vision_mode: str,
         vision_model: str,
     ) -> None:
-        bot_running = bot_port is not None and port_open(bot_port)
+        bot_is_remote = not is_local_service_host(bot_host)
+        bot_running = False
+        if bot_port is not None:
+            if bot_is_remote:
+                try:
+                    probe_service(service_base_url(bot_host, bot_port), bot_service_token)
+                    bot_running = True
+                except (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
+                    bot_running = False
+            else:
+                bot_running = port_open(bot_port)
         bridge_running = bridge_port is not None and port_open(bridge_port)
         napcat_running = napcat_port is not None and port_open(napcat_port)
         napcat_api_ready = False
@@ -2472,9 +2510,11 @@ class ControlPanel(tk.Tk):
         self.after(
             0,
             lambda: self._apply_status(
+                bot_host,
                 bot_port,
                 bridge_port,
                 bot_running,
+                bot_is_remote,
                 bridge_running,
                 napcat_url,
                 napcat_port,
@@ -2487,9 +2527,11 @@ class ControlPanel(tk.Tk):
 
     def _apply_status(
         self,
+        bot_host: str,
         bot_port: int | None,
         bridge_port: int | None,
         bot_running: bool,
+        bot_is_remote: bool,
         bridge_running: bool,
         napcat_url: str,
         napcat_port: int | None,
@@ -2499,8 +2541,11 @@ class ControlPanel(tk.Tk):
         vision_model: str,
     ) -> None:
         self._status_probe_in_flight = False
+        bot_label = "Bot 服务 · 云端可用" if bot_is_remote and bot_running else (
+            "Bot 服务 · 云端不可用" if bot_is_remote else ("Bot 服务 · 运行中" if bot_running else ("Bot 服务 · 端口无效" if bot_port is None else "Bot 服务 · 未运行"))
+        )
         self.bot_status.configure(
-            text="Bot 服务 · 运行中" if bot_running else ("Bot 服务 · 端口无效" if bot_port is None else "Bot 服务 · 未运行"),
+            text=bot_label,
             style="StatusOnline.TLabel" if bot_running else "StatusOffline.TLabel",
         )
         self.bridge_status.configure(

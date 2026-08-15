@@ -34,6 +34,24 @@ Bot service  负责调用大模型
 
 端口不同不是问题，反而是正常的。它们是三个不同服务。
 
+## 1.1 想让本地电脑关机后仍可用，要把谁放到云上
+
+这里有两个方案：
+
+### 方案 A：完整放到腾讯云 Windows 服务器（适合电脑关机）
+
+腾讯云服务器上同时运行 QQNT、NapCat、Bridge 和 Bot service。QQ 登录状态、消息接收和模型调用都在云服务器上，本地电脑关机不影响机器人。
+
+这需要 Windows 云服务器，并通过远程桌面安装 QQNT、NapCat 和 Python。NapCat 仍然要使用它支持的 QQNT 版本，登录时可能需要手机授权。四个服务在同一台服务器时，NapCat API、Bridge 和 Bot 都可以继续使用 127.0.0.1，不需要把 3000、8765、8766 开到公网。
+
+### 方案 B：只把 Bot service 放到云上（适合先试用）
+
+本地仍运行 QQ/NapCat/Bridge，腾讯云只运行 `bot_service.py`。本地控制台的“连接与服务 → Bot 服务地址”填云服务器的内网地址或 Tailscale 地址，Bot 端口填 8765，Bot 服务 Token 两边保持一致。
+
+这个方案只解决模型服务在云上，本地电脑关机后 NapCat 也会停止，所以 QQ 不会继续收发消息。推荐先用 Tailscale、ZeroTier 或 SSH 隧道把两台机器连起来，再让 Bridge 通过私网访问云端 Bot。不要直接用公网 HTTP 传 Bot Token。
+
+腾讯云部署模板和命令见项目的 `deploy/tencent-cloud/README.md`。
+
 ## 2. 准备软件
 
 ### 必需
@@ -151,6 +169,8 @@ NAPCAT_API_URL=http://127.0.0.1:3000
 NAPCAT_ACCESS_TOKEN=NapCat_HTTP_Server_Token
 NAPCAT_EVENT_TOKEN=NapCat_HTTP_Client_Token
 
+BOT_SERVICE_HOST=127.0.0.1
+BOT_SERVICE_PORT=8765
 BOT_SERVICE_TOKEN=Bridge和Bot_service之间的Token
 
 # random 表示从 3、4、5、6 秒中随机等待，也可以写成固定数字

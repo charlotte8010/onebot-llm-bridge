@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from control_panel import HELP_SECTIONS, HELP_TEXTS, OPTION_LABELS, ControlPanel, build_napcat_command, build_napcat_nt_command, build_napcat_utf8_console_command, discover_qq_executable, format_panel_error, generate_service_token, local_url_port, load_env_file, load_theme, parse_port, parse_model_ids, probe_models, save_env_file, save_theme, vision_status
+from control_panel import HELP_SECTIONS, HELP_TEXTS, OPTION_LABELS, ControlPanel, build_napcat_command, build_napcat_nt_command, build_napcat_utf8_console_command, discover_qq_executable, format_panel_error, generate_service_token, is_local_service_host, local_url_port, load_env_file, load_theme, parse_port, parse_model_ids, probe_models, save_env_file, save_theme, service_base_url, vision_status
 
 
 class ControlPanelHelperTests(unittest.TestCase):
@@ -35,6 +35,21 @@ class ControlPanelHelperTests(unittest.TestCase):
         self.assertEqual(local_url_port("http://localhost/api", 3000), 3000)
         self.assertIsNone(local_url_port("https://remote.example/api", 443))
         self.assertIsNone(local_url_port("not a url", 3000))
+
+    def test_bot_host_distinguishes_local_and_remote_modes(self):
+        self.assertTrue(is_local_service_host("127.0.0.1"))
+        self.assertTrue(is_local_service_host("[::1]"))
+        self.assertTrue(is_local_service_host("localhost"))
+        self.assertFalse(is_local_service_host("100.64.0.12"))
+        self.assertFalse(is_local_service_host("bot.example.com"))
+        self.assertEqual(service_base_url("100.64.0.12", 8765), "http://100.64.0.12:8765")
+        self.assertEqual(service_base_url("2001:db8::1", 8765), "http://[2001:db8::1]:8765")
+
+    def test_bot_host_rejects_url_and_path_instead_of_creating_bad_endpoint(self):
+        with self.assertRaises(ValueError):
+            service_base_url("https://bot.example.com", 8765)
+        with self.assertRaises(ValueError):
+            service_base_url("bot.example.com/reply", 8765)
 
     def test_napcat_launcher_can_find_qq_itself(self):
         self.assertEqual(
@@ -122,6 +137,10 @@ class ControlPanelHelperTests(unittest.TestCase):
     def test_token_help_explains_where_each_token_belongs(self):
         self.assertIn("NapCat WebUI", HELP_TEXTS["NAPCAT_EVENT_TOKEN"])
         self.assertIn("不在 NapCat", HELP_TEXTS["BOT_SERVICE_TOKEN"])
+
+    def test_remote_bot_help_explains_private_or_tailscale_address(self):
+        self.assertIn("Tailscale", HELP_TEXTS["BOT_SERVICE_HOST"])
+        self.assertIn("不要填 http://", HELP_TEXTS["BOT_SERVICE_HOST"])
 
     def test_allowlist_help_distinguishes_group_list_and_active_target(self):
         self.assertIn("半角逗号", HELP_TEXTS["GROUP_ALLOWLIST"])
