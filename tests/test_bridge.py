@@ -1,13 +1,15 @@
 import hashlib
 import hmac
+import io
 import tempfile
 import threading
 import time
 import unittest
+from email.message import Message
 from pathlib import Path
 
 from onebot_llm_bridge.config import Settings
-from onebot_llm_bridge.services import Bridge, _event_auth_matches, _related_topic
+from onebot_llm_bridge.services import Bridge, JsonHandler, _event_auth_matches, _related_topic
 
 
 class FakeNapCat:
@@ -43,6 +45,15 @@ class FakeImageResolver:
 
 
 class BridgeTests(unittest.TestCase):
+    def test_json_handler_decodes_chunked_request_body(self):
+        body = b'{"post_type":"message"}'
+        encoded = f"{len(body):X}".encode() + b"\r\n" + body + b"\r\n0\r\n\r\n"
+        handler = JsonHandler.__new__(JsonHandler)
+        handler.headers = Message()
+        handler.headers["Transfer-Encoding"] = "chunked"
+        handler.rfile = io.BytesIO(encoded)
+        self.assertEqual(handler.read_body(), body)
+
     def test_event_auth_accepts_napcat_hmac_signature(self):
         body = b'{"post_type":"message"}'
         token = "event-token"

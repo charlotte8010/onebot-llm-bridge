@@ -112,6 +112,8 @@ class JsonHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def read_body(self) -> bytes:
+        if "chunked" in self.headers.get("Transfer-Encoding", "").lower():
+            return self._read_chunked_body()
         raw_length = self.headers.get("Content-Length")
         try:
             length = int(raw_length or "0")
@@ -120,6 +122,33 @@ class JsonHandler(BaseHTTPRequestHandler):
         if length < 0 or length > MAX_BODY_BYTES:
             raise ValueError("request body is too large")
         return self.rfile.read(length)
+
+    def _read_chunked_body(self) -> bytes:
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            line = self.rfile.readline(8192)
+            if not line:
+                raise ValueError("invalid chunked body: missing chunk size")
+            try:
+                size_text = line.split(b";", 1)[0].strip()
+                size = int(size_text, 16)
+            except ValueError as exc:
+                raise ValueError("invalid chunked body: invalid chunk size") from exc
+            if size == 0:
+                while True:
+                    trailer = self.rfile.readline(8192)
+                    if not trailer or trailer in {b"\r\n", b"\n"}:
+                        return b"".join(chunks)
+            total += size
+            if total > MAX_BODY_BYTES:
+                raise ValueError("request body is too large")
+            chunk = self.rfile.read(size)
+            if len(chunk) != size:
+                raise ValueError("invalid chunked body: truncated chunk")
+            if self.rfile.read(2) != b"\r\n":
+                raise ValueError("invalid chunked body: missing chunk terminator")
+            chunks.append(chunk)
 
     @staticmethod
     def parse_json_body(body: bytes) -> dict[str, Any]:
