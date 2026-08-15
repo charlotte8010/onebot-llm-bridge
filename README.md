@@ -64,7 +64,9 @@ The panel manages chat/vision models, model detection, group policy, debounce,
 context, memory, service tokens, and optional NapCat launch paths. **Save
 configuration** only writes `.env.local`; it does not restart anything. Use
 **Start all**, **Start NapCat**, or **Restart all** explicitly when you are
-ready to apply the saved values.
+ready to apply the saved values. **One-click diagnostics** probes each local
+service, NapCat's `get_status`, and the configured model `/models` endpoint
+without saving or restarting.
 
 一个面向普通用户和开发者的通用 QQ AI Bot 框架。
 

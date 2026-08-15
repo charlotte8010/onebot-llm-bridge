@@ -426,7 +426,9 @@ policy, debounce, context, memory, token fields, and optional NapCat launcher
 paths. The save button only writes `.env.local` and deliberately leaves
 running services alone. Use **Start NapCat** once the three Windows paths are
 filled, then click **Start all** for the bridge and bot service. Click restart
-manually after saving when you want new values to take effect.
+manually after saving when you want new values to take effect. **One-click
+diagnostics** checks Bot service, Bridge, NapCat `get_status`, and the model
+`/models` endpoint in the background; it does not save or restart anything.
 
 ## Optional persistent context
 

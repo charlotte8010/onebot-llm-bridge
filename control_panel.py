@@ -83,6 +83,66 @@ def port_open(port: int) -> bool:
         return False
 
 
+def parse_port(raw: str, default: int) -> int | None:
+    value_text = raw.strip() or str(default)
+    try:
+        value = int(value_text)
+    except ValueError:
+        return None
+    return value if 1 <= value <= 65535 else None
+
+
+def missing_vision_config() -> str:
+    raise ValueError("识图 API Key 或 Base URL 未填写")
+
+
+def _json_request(request: Request, timeout: float = 6.0) -> dict[str, object]:
+    with urlopen(request, timeout=timeout) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("返回内容不是 JSON 对象")
+    return payload
+
+
+def probe_service(base_url: str, token: str = "") -> str:
+    headers = {"Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    payload = _json_request(Request(f"{base_url.rstrip('/')}/health", headers=headers, method="GET"))
+    if payload.get("ok") is False:
+        raise ValueError(str(payload.get("error", "服务返回失败")))
+    return str(payload.get("service", "ok"))
+
+
+def probe_models(base_url: str, api_key: str) -> int:
+    request = Request(
+        f"{base_url.rstrip('/')}/models",
+        headers={"Accept": "application/json", "Authorization": f"Bearer {api_key}"},
+        method="GET",
+    )
+    models = parse_model_ids(_json_request(request))
+    if not models:
+        raise ValueError("/models 没有返回可用模型")
+    return len(models)
+
+
+def probe_napcat(base_url: str, access_token: str = "") -> str:
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    if access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
+    payload = _json_request(
+        Request(
+            f"{base_url.rstrip('/')}/get_status",
+            data=b"{}",
+            headers=headers,
+            method="POST",
+        )
+    )
+    if payload.get("status") == "failed" or payload.get("retcode", 0) not in {0, None}:
+        raise ValueError("NapCat 拒绝了 get_status 请求")
+    return "NapCat API 可用"
+
+
 class ServiceProcess:
     def __init__(self, name: str, script: Path, log: queue.Queue[str]) -> None:
         self.name = name
@@ -246,6 +306,7 @@ class ControlPanel(tk.Tk):
         ttk.Button(actions, text="保存配置（不重启）", command=self.save_config).pack(side="left")
         ttk.Button(actions, text="启动全部", command=self.start_all).pack(side="left", padx=6)
         ttk.Button(actions, text="启动 NapCat", command=self.start_napcat).pack(side="left", padx=6)
+        ttk.Button(actions, text="一键诊断", command=self.run_diagnostics).pack(side="left", padx=6)
         ttk.Button(actions, text="重启全部", command=self.restart_all).pack(side="left", padx=6)
         ttk.Button(actions, text="停止全部", command=self.stop_all).pack(side="left", padx=6)
 
@@ -461,12 +522,7 @@ class ControlPanel(tk.Tk):
 
     @staticmethod
     def _port_value(variable: tk.StringVar, default: int) -> int | None:
-        raw = variable.get().strip() or str(default)
-        try:
-            value = int(raw)
-        except ValueError:
-            return None
-        return value if 1 <= value <= 65535 else None
+        return parse_port(variable.get(), default)
 
     def _select_path(self, variable: tk.StringVar, title: str) -> None:
         selected = filedialog.askopenfilename(parent=self, title=title)
@@ -514,6 +570,40 @@ class ControlPanel(tk.Tk):
             messagebox.showerror("NapCat 启动失败", str(exc), parent=self)
             return
         self._append_log(f"已启动 NapCat：{boot}")
+
+    def run_diagnostics(self) -> None:
+        self._append_log("开始诊断：不会保存配置，也不会重启服务")
+        values = self._current_config()
+        values["BRIDGE_PORT"] = self.bridge_port.get().strip()
+        values["BOT_SERVICE_PORT"] = self.bot_port.get().strip()
+        threading.Thread(target=self._diagnostics_worker, args=(values,), daemon=True).start()
+
+    def _diagnostics_worker(self, values: dict[str, str]) -> None:
+        checks: list[tuple[str, Callable[[], str]]] = []
+        bot_port = parse_port(values.get("BOT_SERVICE_PORT", ""), 8765)
+        bridge_port = parse_port(values.get("BRIDGE_PORT", ""), 8766)
+        if bot_port is not None:
+            checks.append(("Bot service", lambda: probe_service(f"http://127.0.0.1:{bot_port}", values["BOT_SERVICE_TOKEN"])))
+        if bridge_port is not None:
+            checks.append(("Bridge", lambda: probe_service(f"http://127.0.0.1:{bridge_port}")))
+        if values["NAPCAT_API_URL"]:
+            checks.append(("NapCat", lambda: probe_napcat(values["NAPCAT_API_URL"], values["NAPCAT_ACCESS_TOKEN"])))
+        if values["LLM_BASE_URL"] and values["LLM_API_KEY"]:
+            checks.append(("Chat model", lambda: f"发现 {probe_models(values['LLM_BASE_URL'], values['LLM_API_KEY'])} 个模型"))
+        if values["VISION_MODE"] != "off":
+            vision_base = values["VISION_BASE_URL"] or values["LLM_BASE_URL"]
+            vision_key = values["VISION_API_KEY"] or values["LLM_API_KEY"]
+            if vision_base and vision_key:
+                checks.append(("Vision model", lambda: f"发现 {probe_models(vision_base, vision_key)} 个模型"))
+            else:
+                checks.append(("Vision model", missing_vision_config))
+        for label, check in checks:
+            try:
+                result = check()
+                self.after(0, lambda label=label, result=result: self._append_log(f"[通过] {label}: {result}"))
+            except (HTTPError, OSError, URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
+                self.after(0, lambda label=label, exc=exc: self._append_log(f"[失败] {label}: {type(exc).__name__}: {exc}"))
+        self.after(0, lambda: self._append_log("诊断完成"))
 
     def _refresh_status(self) -> None:
         bot_port = self._port_value(self.bot_port, 8765)
