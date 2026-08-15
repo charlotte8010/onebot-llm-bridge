@@ -89,6 +89,10 @@ class ControlPanelHelperTests(unittest.TestCase):
         self.assertIn("第一次启动", titles)
         self.assertIn("配置 Supabase", titles)
 
+    def test_generic_group_help_does_not_hardcode_persona_name(self):
+        content = dict(HELP_SECTIONS)["群聊与消息形态"]
+        self.assertNotIn("御茗", content)
+
     def test_token_help_explains_where_each_token_belongs(self):
         self.assertIn("NapCat WebUI", HELP_TEXTS["NAPCAT_EVENT_TOKEN"])
         self.assertIn("不在 NapCat", HELP_TEXTS["BOT_SERVICE_TOKEN"])
