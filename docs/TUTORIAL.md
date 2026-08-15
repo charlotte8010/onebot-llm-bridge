@@ -413,6 +413,19 @@ Some relay services do not implement `/models`; in that case the diagnostic
 reports the limitation, and you can still keep using the explicitly configured
 model name.
 
+## Control panel
+
+Start the optional local Tkinter panel with:
+
+```powershell
+python .\control_panel.py
+```
+
+It includes the chat model, separate vision model, model detection, group
+policy, debounce, context, memory, and token fields. The save button only
+writes `.env.local` and deliberately leaves running services alone. Click
+restart manually after saving when you want the new values to take effect.
+
 ## Optional persistent context
 
 By default the bridge forgets its context when it restarts. To keep the recent

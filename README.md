@@ -52,6 +52,19 @@ python .\check_models.py
 This prints the configured chat/vision model names and the result of each
 `/models` request, but never prints API keys.
 
+## Control panel
+
+For users who do not want to edit `.env.local` by hand:
+
+```powershell
+python .\control_panel.py
+```
+
+The panel manages chat/vision models, model detection, group policy, debounce,
+context, memory, and service tokens. **Save configuration** only writes
+`.env.local`; it does not restart anything. Use **Restart all** explicitly when
+you are ready to apply the saved values.
+
 一个面向普通用户和开发者的通用 QQ AI Bot 框架。
 
 它通过 [OneBot 11](https://github.com/botuniverse/onebot-11) 接入 NapCat、LLOneBot 等 QQ 客户端，再把消息交给 OpenAI 兼容接口或其他模型服务。项目不绑定任何人的人设、QQ 号、群号和聊天记录，复制配置后即可开始使用。

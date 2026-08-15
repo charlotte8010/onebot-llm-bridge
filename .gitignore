@@ -1,6 +1,7 @@
 .env
 .env.local
 .env.*.local
+.model_presets.json
 .local/
 .venv/
 __pycache__/
@@ -14,4 +15,3 @@ __pycache__/
 dist/
 build/
 node_modules/
-
