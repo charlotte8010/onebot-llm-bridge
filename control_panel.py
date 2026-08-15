@@ -765,7 +765,19 @@ class ControlPanel(tk.Tk):
         style.configure("Section.TLabelframe.Label", background=colors["surface"], foreground=colors["accent"])
         style.configure("TLabel", background=colors["surface"], foreground=colors["text"])
         style.configure("TEntry", fieldbackground=colors["input"], foreground=colors["text"], bordercolor=colors["border"], lightcolor=colors["border"], darkcolor=colors["border"])
+        style.map(
+            "TEntry",
+            bordercolor=[("focus", colors["border"])],
+            lightcolor=[("focus", colors["border"])],
+            darkcolor=[("focus", colors["border"])],
+        )
         style.configure("TCombobox", fieldbackground=colors["input"], foreground=colors["text"], bordercolor=colors["border"], lightcolor=colors["border"], darkcolor=colors["border"])
+        style.map(
+            "TCombobox",
+            bordercolor=[("focus", colors["border"])],
+            lightcolor=[("focus", colors["border"])],
+            darkcolor=[("focus", colors["border"])],
+        )
         style.map("TCombobox", fieldbackground=[("readonly", colors["input"])], foreground=[("readonly", colors["text"])])
         style.configure("TButton", background=colors["surface"], foreground=colors["text"], bordercolor=colors["border"], lightcolor=colors["border"], darkcolor=colors["border"])
         style.map("TButton", background=[("active", colors["button_active"]), ("pressed", colors["button_pressed"])], foreground=[("disabled", colors["muted"])])
@@ -886,7 +898,19 @@ class ControlPanel(tk.Tk):
         style.configure("Section.TLabelframe.Label", background=colors["surface"], foreground=colors["accent"], font=("Microsoft YaHei UI", 10, "bold"))
         style.configure("TLabel", background=colors["surface"], foreground=colors["text"])
         style.configure("TEntry", fieldbackground=colors["input"], foreground=colors["text"], bordercolor=colors["border"], lightcolor=colors["border"], darkcolor=colors["border"], padding=(8, 6))
+        style.map(
+            "TEntry",
+            bordercolor=[("focus", colors["border"])],
+            lightcolor=[("focus", colors["border"])],
+            darkcolor=[("focus", colors["border"])],
+        )
         style.configure("TCombobox", fieldbackground=colors["input"], foreground=colors["text"], bordercolor=colors["border"], lightcolor=colors["border"], darkcolor=colors["border"], padding=(7, 5))
+        style.map(
+            "TCombobox",
+            bordercolor=[("focus", colors["border"])],
+            lightcolor=[("focus", colors["border"])],
+            darkcolor=[("focus", colors["border"])],
+        )
         style.map("TCombobox", fieldbackground=[("readonly", colors["input"])], foreground=[("readonly", colors["text"])])
         style.configure("TButton", background=colors["surface"], foreground=colors["text"], bordercolor=colors["border"], lightcolor=colors["border"], darkcolor=colors["border"], padding=(12, 7), font=("Microsoft YaHei UI", 9))
         style.map("TButton", background=[("active", colors["button_active"]), ("pressed", colors["button_pressed"])], foreground=[("disabled", colors["muted"])])
