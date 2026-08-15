@@ -29,6 +29,144 @@ DEFAULT_NAPCAT_API_URL = "http://127.0.0.1:3000"
 DEFAULT_WINDOW_GEOMETRY = "1040x860"
 
 
+# The UI shows readable Chinese labels while the values written to .env.local
+# stay stable for the runtime and existing installations.
+OPTION_LABELS: dict[str, dict[str, str]] = {
+    "VISION_MODE": {"off": "关闭识图", "direct": "直接识图", "separate": "单独视觉模型"},
+    "GROUP_MODE": {"mention": "叫到才回", "smart": "智能跟随", "all": "群聊都回", "off": "关闭群聊"},
+    "DECISION_MODE": {"heuristic": "本地规则", "model": "模型判断"},
+    "DEBOUNCE_SECONDS": {"random": "随机 3-6 秒", "3": "3 秒", "4": "4 秒", "5": "5 秒", "6": "6 秒"},
+    "REACTION_MODE": {"off": "关闭", "like": "点赞回应"},
+    "ACTIVE_TARGET_TYPE": {"private": "私聊", "group": "群聊"},
+    "REMOTE_MEMORY_MODE": {"local_first": "本地优先", "coordinated": "协调模式"},
+}
+
+
+HELP_TEXTS: dict[str, str] = {
+    "MODEL_PRESET": "预设只负责快速填入模型相关字段。选中后仍可以继续修改，保存配置并启动或重启服务后才会影响正在运行的服务。",
+    "LLM_API_KEY": "模型中转站或服务商提供的密钥。只保存在本机配置里，不要把它发到群里或提交到 GitHub。",
+    "LLM_BASE_URL": "模型接口地址，通常以 /v1 结尾。点击“检测模型”会请求这个地址的 /models。",
+    "LLM_MODEL": "实际使用的模型名称。检测模型会从当前 Base URL 读取可用模型，也可以手动输入。",
+    "LLM_MAX_TOKENS": "限制模型最多输出多少 token。太小可能截断，太大通常会更慢。",
+    "LLM_TIMEOUT_SECONDS": "等待模型返回的最长秒数。思考模型可以调大，普通聊天模型不必太大。",
+    "VISION_MODE": "关闭识图：不发送图片给模型；直接识图：交给主模型；单独视觉模型：用另一套视觉 API 先描述图片。",
+    "VISION_BASE_URL": "单独视觉模型的接口地址。留空时复用主模型地址。",
+    "VISION_MODEL": "单独视觉模型的名称。只有启用“单独视觉模型”时才需要填写。",
+    "GROUP_MODE": "叫到才回：需要 @ 或名字；智能跟随：叫过一次后短时间继续当前话题；群聊都回：白名单群里的消息都参与判断；关闭群聊：不处理群聊。",
+    "DECISION_MODE": "本地规则速度快、成本低；模型判断更灵活，可以判断要不要回、是否继续话题、是否引用或加 reaction。",
+    "GROUP_ALLOWLIST": "允许自动回复的群号，多个群号用逗号分隔。智能跟随和群聊都回只对这里的群生效。",
+    "DEBOUNCE_SECONDS": "收到消息后先等一小段时间，把对方连续发的几条合并成一次输入。随机模式会在 3、4、5、6 秒中随机选择。",
+    "FOLLOWUP_SECONDS": "机器人回复后，在这段时间内同一话题可以不再 @ 继续聊；无关话题仍会被忽略。",
+    "CONTEXT_MESSAGES": "每次请求附带的最近消息条数。太少会断上下文，太多会增加延迟和输入费用。",
+    "MEMORY_DB": "本地 SQLite 记忆库路径。留空也可以运行，只是不保存跨重启的本地记忆。",
+    "REACTION_MODE": "点赞回应只是在已有消息上加 reaction，不会额外发送一条表情消息。",
+    "PERSONA_FILE": "稳定的人设提示词文件。建议把长期不变的人设、说话方式和明确禁忌放在这里。",
+    "EMOJI_CATALOG": "表情词典路径。可以点击“编辑词典”，让模型知道“笑死”“无语”等词对应哪个 NapCat 表情 ID。",
+    "ACTIVE_ENABLED": "启用后会按间隔主动给目标发消息。建议先用私聊测试，并设置较长间隔。",
+    "TOOLS_ENABLED": "只允许工具白名单里的工具被模型调用。不了解工具用途时建议关闭。",
+    "NAPCAT_API_URL": "NapCat 的 HTTP Server 地址，通常是 http://127.0.0.1:3000。控制台和 Bridge 通过它发消息。",
+    "NAPCAT_ACCESS_TOKEN": "NapCat HTTP Server 的访问 Token。它和“事件上报 Token”不是同一个东西。",
+    "NAPCAT_EVENT_TOKEN": "NapCat 向 Bridge 上报消息时使用的 Token，必须和 NapCat OneBot11 HTTP 上报配置一致。",
+    "BOT_SERVICE_TOKEN": "Bridge 调用本地 Bot 服务时使用的 Token，必须和 Bot 服务的配置一致。",
+    "BRIDGE_PORT": "Bridge 接收 NapCat 事件的端口，默认 8766。",
+    "BOT_SERVICE_PORT": "Bot 服务提供模型回复的端口，默认 8765。",
+    "NAPCAT_BOOT": "NapCatWinBootMain.exe 的路径，用于一键启动 NapCat。",
+    "NAPCAT_QQ": "QQ.exe 的路径。要和 NapCat 使用的 QQNT 安装保持一致。",
+    "NAPCAT_HOOK": "NapCatWinBootHook.dll 的路径，用于注入 NapCat。",
+    "SUPABASE_URL": "Supabase 项目 URL，例如 https://xxxx.supabase.co。只填写项目地址，不要填 /rest/v1。",
+    "SUPABASE_SECRET_KEY": "Supabase 后台的 Secret Key，只放在本机配置中。不要使用 anon key，也不要提交到 GitHub。",
+    "SUPABASE_TIMEOUT_SECONDS": "访问 Supabase 的最长等待时间。网络不稳定时可以适当调大。",
+    "REMOTE_MEMORY_MODE": "本地优先：远端不可用时仍继续回复；协调模式：多台 Bridge 共用远端租约，减少重复回复。",
+    "SUMMARY_ENABLED": "达到触发条数后，用模型把远端聊天压缩成摘要和事实，减少长期记忆占用。",
+    "SUMMARY_MIN_MESSAGES": "累计多少条远端消息后触发一次摘要。数字越小越频繁，模型调用也越多。",
+    "SUMMARY_DELAY_SECONDS": "摘要任务开始前的等待时间，用来合并短时间内连续产生的消息。",
+}
+
+
+HELP_SECTIONS: tuple[tuple[str, str], ...] = (
+    (
+        "第一次启动",
+        """按这个顺序做，保存配置不会自动重启服务：
+
+1. 打开控制台，先在“模型与识图”里填写 API Key、Base URL。
+2. 点击“检测模型”，在模型下拉框选择一个模型；也可以手动输入模型名。
+3. 如果模型本身支持图片，识图模式选“直接识图”；如果是 DeepSeek 这类文本模型，建议配置单独视觉模型。
+4. 在“连接与服务”里确认 NapCat API 是 http://127.0.0.1:3000，端口一般保持 8766 和 8765。
+5. 点击“保存配置”，再手动启动 NapCat、Bot 和 Bridge。也可以用控制台的“一键启动”。
+6. 先私聊自己的 QQ 号发“1”测试，再配置群聊白名单。
+
+提示：预设只是填表，不会偷偷启动服务；保存配置也不会自动重启。""",
+    ),
+    (
+        "模型与识图",
+        """主模型负责聊天回复。Base URL 要填中转站的 OpenAI 兼容地址，通常带 /v1。
+
+识图有三种模式：
+• 关闭识图：收到图片时只知道“对方发了一张图片”。
+• 直接识图：把图片和文字一起交给主模型，前提是主模型支持视觉输入。
+• 单独视觉模型：先把图片交给视觉 API，再把图片描述交给聊天模型，适合聊天模型不支持图片的情况。
+
+“检测模型”检测的是当前页面里填写的 URL 和 Key，不是固定的 DS 模型列表。返回 403 时先检查 Key、URL 和中转站权限。""",
+    ),
+    (
+        "NapCat 连接",
+        """这三个地址和 Token 容易混淆：
+
+• 3000：NapCat HTTP Server，Bridge 用它发送消息、reaction 和输入状态。
+• 8766：Bridge 的 OneBot HTTP 上报入口，NapCat 把收到的 QQ 消息发到这里。
+• 8765：Bot 服务，负责调用模型并返回回复。
+
+事件上报 Token 写在 NapCat 的 OneBot11 HTTP 上报配置里，必须和控制台的“事件上报 Token”一致。
+Bot 服务 Token 是 Bridge 调用 8765 时用的，必须和 Bot 服务配置一致。
+出现 401 通常是 Token 不一致；出现 8766 连接拒绝通常是 Bridge 没启动或端口填错。""",
+    ),
+    (
+        "配置 Supabase",
+        """Supabase 用来保存跨重启、跨设备的聊天记忆。建议使用私有项目。
+
+1. 在 Supabase 新建项目，打开 SQL Editor。
+2. 执行项目里的迁移文件：supabase/migrations/202608150001_bridge_memory.sql。
+3. 把项目 Settings > API 里的 Project URL 填入 Supabase URL。
+4. 把后台 Secret Key 填入 Supabase Secret Key。不要填 anon key，也不要把这个值发给别人。
+5. 填写 Bot QQ，然后选择“本地优先”或“协调模式”。
+6. 需要长期摘要时勾选自动摘要，设置触发条数；不需要可以先关闭。
+7. 点击“保存配置”，手动重启 Bot 和 Bridge 后再测试。
+
+远端记忆不可用时，“本地优先”会继续工作；“协调模式”更适合两台机器同时运行同一个 Bot。""",
+    ),
+    (
+        "群聊与消息形态",
+        """群聊模式决定什么时候进入回复流程：
+
+• 叫到才回：需要 @ 御茗、御茗茗、ymm 或配置的 Bot 名称。
+• 智能跟随：被叫到后，在继续话题时间内可以接着聊；插入的无关话题会被忽略。
+• 群聊都回：白名单群里的消息都交给回复判断。
+
+防抖延迟会先收集对方连续消息，再合并成一次输入，避免“发两句回两次”。回复延迟只影响发送前等待，不会改变消息内容。reaction 是对已有消息的回应，不是发送表情气泡。""",
+    ),
+    (
+        "Persona、记忆与词典",
+        """Persona 适合放稳定的人设和说话规则；“编辑 Persona”可以直接在控制台修改，不必手动打开文档。
+
+“上下文条数”是本次请求带入的近期消息；“持久化记忆库”是本地 SQLite 文件；Supabase 是跨设备的远端记忆，三者用途不同。
+
+“编辑词典”用于维护表情含义和 NapCat reaction ID。不要为了让模型更像真人，把所有口癖都写成每句必用；规则应该描述“什么时候可能使用”。""",
+    ),
+    (
+        "常见故障",
+        """• Bot 不回：看 Bridge 日志有没有“8765/reply timed out”，再看 Bot 服务是否真的监听 8765。
+• NapCat 报 401：对比 NapCat 的上报 Token 和控制台的事件上报 Token；不要拿 Bot 服务 Token 代替。
+• NapCat 报 403：检查 NapCat API Token，并确认 NapCat HTTP Server 开在控制台填写的地址。
+• 8766 refused：Bridge 没启动、已退出，或 NapCat 上报地址仍指向别的端口。
+• 图片读不到：主模型可能不支持视觉输入，切换到“单独视觉模型”，并填写视觉 API。
+• QQ 版本兼容性警告：NapCat 日志里会提示当前 QQNT 版本是否有 PacketBackend 偏移数据；优先使用 release 说明中的兼容版本。
+• 模型检测 403：检查当前填写的 URL、Key 和中转站是否允许 /models；这和聊天接口能否调用是两件事。
+
+修改配置后请按自己的节奏手动重启，不需要反复关闭整个控制台。""",
+    ),
+)
+
+
 def enable_windows_dpi_awareness() -> None:
     """Keep Tk from being bitmap-scaled by Windows on high-DPI displays."""
     if sys.platform != "win32":
@@ -337,6 +475,93 @@ class FixedTabNotebook(tk.Frame):
             label.configure(background=background, foreground=colors["accent"] if selected else colors["muted"])
 
 
+class Tooltip:
+    """Small delayed hover explanation used by the inline help badges."""
+
+    def __init__(self, widget: tk.Misc, text: str, owner: object) -> None:
+        self.widget = widget
+        self.text = text
+        self.owner = owner
+        self.window: tk.Toplevel | None = None
+        self._job: str | None = None
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self.hide, add="+")
+
+    def _schedule(self, _event: tk.Event[tk.Misc] | None = None) -> None:
+        self._cancel()
+        self._job = self.widget.after(350, self.show)
+
+    def _cancel(self) -> None:
+        if self._job is not None:
+            try:
+                self.widget.after_cancel(self._job)
+            except tk.TclError:
+                pass
+            self._job = None
+
+    def show(self) -> None:
+        self._job = None
+        if self.window is not None or not self.widget.winfo_exists():
+            return
+        colors = getattr(self.owner, "COLORS")
+        window = tk.Toplevel(self.widget)
+        self.window = window
+        window.wm_overrideredirect(True)
+        window.attributes("-topmost", True)
+        window.configure(background=colors["border"])
+        label = tk.Label(
+            window,
+            text=self.text,
+            justify="left",
+            anchor="w",
+            wraplength=330,
+            padx=10,
+            pady=7,
+            background=colors["surface_alt"],
+            foreground=colors["text"],
+            font=("Microsoft YaHei UI", 9),
+        )
+        label.pack(padx=1, pady=1)
+        x = self.widget.winfo_rootx() + self.widget.winfo_width() + 8
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+        window.geometry(f"+{x}+{y}")
+
+    def hide(self, _event: tk.Event[tk.Misc] | None = None) -> None:
+        self._cancel()
+        if self.window is not None:
+            self.window.destroy()
+            self.window = None
+
+
+class HelpBadge(tk.Canvas):
+    """A tiny circled question mark that does not change row height."""
+
+    def __init__(self, parent: tk.Misc, owner: object, text: str) -> None:
+        self.owner = owner
+        super().__init__(
+            parent,
+            width=17,
+            height=17,
+            highlightthickness=0,
+            bd=0,
+            relief="flat",
+            cursor="question_arrow",
+            background=getattr(owner, "COLORS")["surface"],
+        )
+        self._draw()
+        Tooltip(self, text, owner)
+
+    def _draw(self) -> None:
+        colors = getattr(self.owner, "COLORS")
+        self.delete("all")
+        self.configure(background=colors["surface"])
+        self.create_oval(1, 1, 16, 16, outline=colors["muted"], width=1)
+        self.create_text(8.5, 8.5, text="?", fill=colors["muted"], font=("Segoe UI", 8, "bold"))
+
+    def apply_theme(self) -> None:
+        self._draw()
+
+
 class ControlPanel(tk.Tk):
     THEMES = {
         "morandi": {
@@ -398,6 +623,8 @@ class ControlPanel(tk.Tk):
         self._scrollbar_visibility_job: str | None = None
         self._scroll_job: str | None = None
         self._pending_scroll_units = 0
+        self._help_badges: list[HelpBadge] = []
+        self._help_window: tk.Toplevel | None = None
         self.bot = ServiceProcess("bot", BOT_SCRIPT, self.log_queue)
         self.bridge = ServiceProcess("bridge", BRIDGE_SCRIPT, self.log_queue)
         self.napcat_process: subprocess.Popen[bytes] | None = None
@@ -457,6 +684,9 @@ class ControlPanel(tk.Tk):
             canvas.configure(background=colors["background"])
         if hasattr(self, "notebook"):
             self.notebook.apply_theme(colors)
+        for badge in getattr(self, "_help_badges", []):
+            if badge.winfo_exists():
+                badge.apply_theme()
         if hasattr(self, "theme_button"):
             self.theme_button.configure(text="切换夜间" if self.theme_name == "morandi" else "切换浅色")
 
@@ -563,6 +793,7 @@ class ControlPanel(tk.Tk):
         ttk.Label(header_top, text="LOCAL OPERATOR CONSOLE", style="Eyebrow.TLabel").pack(side="left")
         self.theme_button = ttk.Button(header_top, command=self.toggle_theme)
         self.theme_button.pack(side="right")
+        ttk.Button(header_top, text="操作说明", command=self.open_help).pack(side="right", padx=(0, 8))
         ttk.Label(header, text="OneBot LLM Bridge", style="Title.TLabel").pack(anchor="w", pady=(3, 0))
         subtitle = ttk.Label(
             outer,
@@ -623,7 +854,7 @@ class ControlPanel(tk.Tk):
         model.pack(fill="x")
         model.columnconfigure(1, weight=1)
         self.preset = tk.StringVar()
-        self._label(model, 0, 0, "模型预设")
+        self._label(model, 0, 0, "模型预设", "MODEL_PRESET")
         self.preset_box = ttk.Combobox(model, textvariable=self.preset, values=[*sorted(self.presets), "+"], state="readonly")
         self.preset_box.grid(row=0, column=1, sticky="ew", pady=4)
         self.preset_box.bind("<<ComboboxSelected>>", self._preset_selected)
@@ -641,9 +872,7 @@ class ControlPanel(tk.Tk):
         vision = ttk.LabelFrame(self.settings, text="图片识图", padding=14, style="Section.TLabelframe")
         vision.pack(fill="x", pady=(10, 0))
         vision.columnconfigure(1, weight=1)
-        self.vision_mode = tk.StringVar(value=self._value("VISION_MODE", "off"))
-        self._label(vision, 0, 0, "识图模式")
-        ttk.Combobox(vision, textvariable=self.vision_mode, values=("off", "direct", "separate"), state="readonly").grid(row=0, column=1, sticky="w", pady=4)
+        self.vision_mode = self._combo(vision, 0, 0, "识图模式", "VISION_MODE", ("off", "direct", "separate"), "off")
         self.vision_api_key = self._entry(vision, 1, "视觉 API Key", "VISION_API_KEY", secret=True)
         self.vision_base_url = self._entry(vision, 2, "视觉 Base URL", "VISION_BASE_URL")
         self.vision_model = self._model_entry(vision, 3, "视觉模型", "VISION_MODEL", self.detect_vision_models)
@@ -667,11 +896,11 @@ class ControlPanel(tk.Tk):
         self.memory_db = self._entry(behavior, 5, "持久化记忆库", "MEMORY_DB", "", column=2)
         self.reaction_mode = self._combo(behavior, 6, 2, "表情回应", "REACTION_MODE", ("off", "like"), "off")
         self.typing = tk.BooleanVar(value=self._value("TYPING_STATUS", "true").lower() in {"1", "true", "yes", "on"})
-        ttk.Checkbutton(behavior, text="显示输入状态", variable=self.typing).grid(row=6, column=0, columnspan=2, sticky="w", pady=4)
+        self._checkbutton(behavior, 6, 0, "显示输入状态", self.typing)
         self.active_enabled = tk.BooleanVar(value=self._value("ACTIVE_ENABLED", "false").lower() in {"1", "true", "yes", "on"})
-        ttk.Checkbutton(behavior, text="启用定时主动消息", variable=self.active_enabled).grid(row=7, column=0, columnspan=2, sticky="w", pady=4)
+        self._checkbutton(behavior, 7, 0, "启用定时主动消息", self.active_enabled, "ACTIVE_ENABLED")
         self.tools_enabled = tk.BooleanVar(value=self._value("TOOLS_ENABLED", "false").lower() in {"1", "true", "yes", "on"})
-        ttk.Checkbutton(behavior, text="启用白名单工具", variable=self.tools_enabled).grid(row=7, column=2, columnspan=2, sticky="w", pady=4)
+        self._checkbutton(behavior, 7, 2, "启用白名单工具", self.tools_enabled, "TOOLS_ENABLED", columnspan=2)
         self.active_interval = self._entry(behavior, 8, "主动消息间隔(分钟)", "ACTIVE_INTERVAL_MINUTES", "60")
         self.active_target_type = self._combo(behavior, 8, 2, "主动消息类型", "ACTIVE_TARGET_TYPE", ("private", "group"), "private")
         self.active_target_id = self._entry(behavior, 9, "主动消息目标", "ACTIVE_TARGET_ID", "")
@@ -716,12 +945,12 @@ class ControlPanel(tk.Tk):
         self.napcat_hook = self._entry(network, 8, "NapCat Hook", "NAPCAT_HOOK")
         self.supabase_url = self._entry(network, 9, "Supabase URL", "SUPABASE_URL")
         self.supabase_key = self._entry(network, 10, "Supabase Secret Key", "SUPABASE_SECRET_KEY", secret=True)
-        self.supabase_timeout = self._entry(network, 11, "Supabase timeout (s)", "SUPABASE_TIMEOUT_SECONDS", "10", column=2)
-        self.remote_memory_mode = self._combo(network, 12, 0, "Remote memory", "REMOTE_MEMORY_MODE", ("local_first", "coordinated"), "local_first")
+        self.supabase_timeout = self._entry(network, 11, "Supabase 超时秒数", "SUPABASE_TIMEOUT_SECONDS", "10", column=2)
+        self.remote_memory_mode = self._combo(network, 12, 0, "远端记忆", "REMOTE_MEMORY_MODE", ("local_first", "coordinated"), "local_first")
         self.summary_enabled = tk.BooleanVar(value=self._value("SUMMARY_ENABLED", "false").lower() in {"1", "true", "yes", "on"})
-        ttk.Checkbutton(network, text="Enable automatic summaries", variable=self.summary_enabled).grid(row=13, column=0, columnspan=2, sticky="w", pady=4)
-        self.summary_min_messages = self._entry(network, 14, "Summary trigger", "SUMMARY_MIN_MESSAGES", "40")
-        self.summary_delay = self._entry(network, 14, "Summary delay (s)", "SUMMARY_DELAY_SECONDS", "10", column=2)
+        self._checkbutton(network, 13, 0, "启用自动摘要", self.summary_enabled, "SUMMARY_ENABLED", columnspan=2)
+        self.summary_min_messages = self._entry(network, 14, "摘要触发条数", "SUMMARY_MIN_MESSAGES", "40")
+        self.summary_delay = self._entry(network, 14, "摘要等待秒数", "SUMMARY_DELAY_SECONDS", "10", column=2)
         ttk.Button(network, text="选择", command=lambda: self._select_path(self.napcat_boot, "选择 NapCat 启动程序")).grid(row=6, column=2, padx=(8, 0), pady=4)
         ttk.Button(network, text="选择", command=lambda: self._select_path(self.napcat_qq, "选择 QQ 程序")).grid(row=7, column=2, padx=(8, 0), pady=4)
         ttk.Button(network, text="选择", command=lambda: self._select_path(self.napcat_hook, "选择 NapCat Hook")).grid(row=8, column=2, padx=(8, 0), pady=4)
@@ -855,17 +1084,43 @@ class ControlPanel(tk.Tk):
         self._active_canvas = self._tab_canvases[index]
         self._schedule_scrollbar_visibility()
 
-    def _label(self, parent: ttk.Frame, row: int, column: int, text: str) -> None:
-        ttk.Label(parent, text=text, style="Form.TLabel").grid(row=row, column=column, sticky="w", padx=(0, 10), pady=5)
+    def _label(self, parent: ttk.Frame, row: int, column: int, text: str, help_key: str = "") -> None:
+        holder = ttk.Frame(parent, style="Surface.TFrame")
+        holder.grid(row=row, column=column, sticky="w", padx=(0, 10), pady=5)
+        ttk.Label(holder, text=text, style="Form.TLabel").pack(side="left")
+        help_text = HELP_TEXTS.get(help_key, "")
+        if help_text:
+            badge = HelpBadge(holder, self, help_text)
+            badge.pack(side="left", padx=(4, 0))
+            self._help_badges.append(badge)
+
+    def _checkbutton(
+        self,
+        parent: ttk.Frame,
+        row: int,
+        column: int,
+        text: str,
+        variable: tk.BooleanVar,
+        help_key: str = "",
+        columnspan: int = 2,
+    ) -> None:
+        holder = ttk.Frame(parent, style="Surface.TFrame")
+        holder.grid(row=row, column=column, columnspan=columnspan, sticky="w", pady=4)
+        ttk.Checkbutton(holder, text=text, variable=variable).pack(side="left")
+        help_text = HELP_TEXTS.get(help_key, "")
+        if help_text:
+            badge = HelpBadge(holder, self, help_text)
+            badge.pack(side="left", padx=(4, 0))
+            self._help_badges.append(badge)
 
     def _entry(self, parent: ttk.Frame, row: int, label: str, key: str, default: str = "", secret: bool = False, column: int = 0) -> tk.StringVar:
-        self._label(parent, row, column, label)
+        self._label(parent, row, column, label, key)
         variable = tk.StringVar(value=self._value(key, default))
         ttk.Entry(parent, textvariable=variable, show="*" if secret else "").grid(row=row, column=column + 1, sticky="ew", padx=(0, 18) if column == 0 else (0, 0), pady=5)
         return variable
 
     def _model_entry(self, parent: ttk.Frame, row: int, label: str, key: str, detect: Callable[[], None]) -> tk.StringVar:
-        self._label(parent, row, 0, label)
+        self._label(parent, row, 0, label, key)
         variable = tk.StringVar(value=self._value(key))
         box = ttk.Combobox(parent, textvariable=variable, state="normal")
         box.grid(row=row, column=1, sticky="ew", pady=5)
@@ -880,10 +1135,126 @@ class ControlPanel(tk.Tk):
         return variable
 
     def _combo(self, parent: ttk.Frame, row: int, column: int, label: str, key: str, values: tuple[str, ...], default: str) -> tk.StringVar:
-        self._label(parent, row, column, label)
-        variable = tk.StringVar(value=self._value(key, default))
-        ttk.Combobox(parent, textvariable=variable, values=values, state="readonly").grid(row=row, column=column + 1, sticky="ew", padx=(0, 18) if column == 0 else (0, 0), pady=5)
+        self._label(parent, row, column, label, key)
+        internal_value = self._value(key, default)
+        labels = OPTION_LABELS.get(key, {})
+        display_values = tuple(labels.get(value, value) for value in values)
+        display_value = labels.get(internal_value, internal_value)
+        variable = tk.StringVar(value=internal_value)
+        display_variable = tk.StringVar(value=display_value)
+        box = ttk.Combobox(
+            parent,
+            textvariable=display_variable,
+            values=display_values,
+            state="readonly",
+        )
+        box.grid(row=row, column=column + 1, sticky="ew", padx=(0, 18) if column == 0 else (0, 0), pady=5)
+        reverse = {label: value for value, label in zip(values, display_values)}
+        box.bind("<<ComboboxSelected>>", lambda _event: variable.set(reverse.get(display_variable.get(), display_variable.get())))
+        variable.trace_add("write", lambda *_args: display_variable.set(labels.get(variable.get(), variable.get())))
         return variable
+
+    def open_help(self) -> None:
+        if self._help_window is not None and self._help_window.winfo_exists():
+            self._help_window.deiconify()
+            self._help_window.lift()
+            return
+
+        colors = self.COLORS
+        window = tk.Toplevel(self)
+        self._help_window = window
+        window.title("OneBot LLM Bridge | 操作说明")
+        window.geometry("980x680")
+        window.minsize(760, 520)
+        window.configure(background=colors["background"])
+        window.protocol("WM_DELETE_WINDOW", lambda: self._close_help(window))
+        window.columnconfigure(0, weight=1)
+        window.rowconfigure(2, weight=1)
+
+        header = tk.Frame(window, background=colors["background"], padx=24, pady=18)
+        header.grid(row=0, column=0, sticky="ew")
+        tk.Label(header, text="操作说明", background=colors["background"], foreground=colors["text"], font=("Microsoft YaHei UI", 20, "bold")).pack(anchor="w")
+        tk.Label(header, text="按左侧步骤配置即可，不需要直接编辑配置文件。", background=colors["background"], foreground=colors["muted"], font=("Microsoft YaHei UI", 10)).pack(anchor="w", pady=(4, 0))
+
+        rule = tk.Frame(window, background=colors["border"], height=1)
+        rule.grid(row=1, column=0, sticky="ew")
+
+        body = tk.Frame(window, background=colors["background"], padx=24, pady=18)
+        body.grid(row=2, column=0, sticky="nsew")
+        body.columnconfigure(1, weight=1)
+        body.rowconfigure(0, weight=1)
+
+        sidebar = tk.Frame(body, background=colors["surface"], padx=10, pady=10, width=210)
+        sidebar.grid(row=0, column=0, sticky="nsw", padx=(0, 14))
+        sidebar.grid_propagate(False)
+        tk.Label(sidebar, text="目录", background=colors["surface"], foreground=colors["accent"], font=("Microsoft YaHei UI", 10, "bold"), anchor="w").pack(fill="x", padx=6, pady=(2, 8))
+        listbox = tk.Listbox(
+            sidebar,
+            activestyle="none",
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+            selectborderwidth=0,
+            background=colors["surface"],
+            foreground=colors["text"],
+            selectbackground=colors["accent_soft"],
+            selectforeground=colors["text"],
+            font=("Microsoft YaHei UI", 10),
+        )
+        listbox.pack(fill="both", expand=True)
+        for title, _content in HELP_SECTIONS:
+            listbox.insert("end", title)
+
+        document = tk.Frame(body, background=colors["surface"], padx=18, pady=16)
+        document.grid(row=0, column=1, sticky="nsew")
+        document.columnconfigure(0, weight=1)
+        document.rowconfigure(1, weight=1)
+        section_title = tk.Label(document, text="", background=colors["surface"], foreground=colors["accent"], anchor="w", font=("Microsoft YaHei UI", 14, "bold"))
+        section_title.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        text = tk.Text(
+            document,
+            wrap="word",
+            relief="flat",
+            borderwidth=0,
+            padx=4,
+            pady=2,
+            background=colors["surface"],
+            foreground=colors["text"],
+            insertbackground=colors["accent"],
+            selectbackground=colors["accent_soft"],
+            font=("Microsoft YaHei UI", 10),
+            spacing1=2,
+            spacing3=5,
+        )
+        text.grid(row=1, column=0, sticky="nsew")
+        document_scrollbar = ttk.Scrollbar(document, orient="vertical", command=text.yview)
+        document_scrollbar.grid(row=1, column=1, sticky="ns", padx=(10, 0))
+        text.configure(yscrollcommand=document_scrollbar.set)
+
+        def render(_event: tk.Event[tk.Misc] | None = None) -> None:
+            selection = listbox.curselection()
+            index = selection[0] if selection else 0
+            title, content = HELP_SECTIONS[index]
+            section_title.configure(text=title)
+            text.configure(state="normal")
+            text.delete("1.0", "end")
+            text.insert("1.0", content)
+            text.configure(state="disabled")
+            text.yview_moveto(0)
+
+        listbox.bind("<<ListboxSelect>>", render)
+        listbox.selection_set(0)
+        render()
+
+        footer = tk.Frame(window, background=colors["background"], padx=24, pady=18)
+        footer.grid(row=3, column=0, sticky="ew")
+        tk.Button(footer, text="关闭", command=lambda: self._close_help(window), relief="flat", bd=0, padx=16, pady=6, background=colors["accent"], foreground=colors["background"], activebackground=colors["accent_active"], activeforeground=colors["background"], font=("Microsoft YaHei UI", 9, "bold")).pack(side="right")
+
+    def _close_help(self, window: tk.Toplevel) -> None:
+        if window.winfo_exists():
+            window.destroy()
+        if self._help_window is window:
+            self._help_window = None
 
     def _status(self, parent: ttk.Frame, column: int, label: str) -> ttk.Label:
         parent.columnconfigure(column, weight=1)

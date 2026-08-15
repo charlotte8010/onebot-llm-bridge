@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from control_panel import ControlPanel, local_url_port, load_env_file, load_theme, parse_port, parse_model_ids, probe_models, save_env_file, save_theme
+from control_panel import HELP_SECTIONS, OPTION_LABELS, ControlPanel, local_url_port, load_env_file, load_theme, parse_port, parse_model_ids, probe_models, save_env_file, save_theme
 
 
 class ControlPanelHelperTests(unittest.TestCase):
@@ -51,6 +51,16 @@ class ControlPanelHelperTests(unittest.TestCase):
             [ControlPanel.THEMES["dark"][key] for key in ("background", "surface", "surface_alt", "input", "border")],
             ["#2D2D39", "#35343D", "#3D3B40", "#434343", "#4A4A4A"],
         )
+
+    def test_combo_labels_are_localized_without_changing_runtime_values(self):
+        self.assertEqual(OPTION_LABELS["DECISION_MODE"]["heuristic"], "本地规则")
+        self.assertEqual(OPTION_LABELS["VISION_MODE"]["separate"], "单独视觉模型")
+        self.assertEqual(OPTION_LABELS["GROUP_MODE"]["mention"], "叫到才回")
+
+    def test_help_sections_cover_first_run_and_supabase(self):
+        titles = {title for title, _content in HELP_SECTIONS}
+        self.assertIn("第一次启动", titles)
+        self.assertIn("配置 Supabase", titles)
 
     def test_probe_models_uses_bearer_key_and_counts_models(self):
         class Response:
