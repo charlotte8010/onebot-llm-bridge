@@ -88,6 +88,12 @@ class Settings:
     llm_model: str
     llm_max_tokens: int = 1024
     llm_timeout_seconds: float = 60.0
+    vision_mode: str = "off"
+    vision_api_key: str = ""
+    vision_base_url: str = ""
+    vision_model: str = ""
+    vision_max_tokens: int = 512
+    vision_timeout_seconds: float = 30.0
     napcat_api_url: str = "http://127.0.0.1:3000"
     napcat_access_token: str = ""
     napcat_event_token: str = ""
@@ -112,6 +118,9 @@ class Settings:
         group_mode = _text(values, "GROUP_MODE", "mention").lower()
         if group_mode not in {"mention", "smart", "all", "off"}:
             raise ConfigError("GROUP_MODE must be mention, smart, all, or off")
+        vision_mode = _text(values, "VISION_MODE", "off").lower()
+        if vision_mode not in {"off", "direct", "separate"}:
+            raise ConfigError("VISION_MODE must be off, direct, or separate")
         allowlist = frozenset(
             item.strip() for item in _text(values, "GROUP_ALLOWLIST").split(",") if item.strip()
         )
@@ -137,6 +146,12 @@ class Settings:
             llm_model=_text(values, "LLM_MODEL"),
             llm_max_tokens=_int(values, "LLM_MAX_TOKENS", 1024, 1, 32768),
             llm_timeout_seconds=_float(values, "LLM_TIMEOUT_SECONDS", 60.0, 1.0, 600.0),
+            vision_mode=vision_mode,
+            vision_api_key=_text(values, "VISION_API_KEY"),
+            vision_base_url=_text(values, "VISION_BASE_URL").rstrip("/"),
+            vision_model=_text(values, "VISION_MODEL"),
+            vision_max_tokens=_int(values, "VISION_MAX_TOKENS", 512, 1, 8192),
+            vision_timeout_seconds=_float(values, "VISION_TIMEOUT_SECONDS", 30.0, 1.0, 600.0),
             napcat_api_url=_text(values, "NAPCAT_API_URL", "http://127.0.0.1:3000").rstrip("/"),
             napcat_access_token=_text(values, "NAPCAT_ACCESS_TOKEN"),
             napcat_event_token=_text(values, "NAPCAT_EVENT_TOKEN"),
@@ -170,6 +185,18 @@ class Settings:
         ]
         if missing:
             raise ConfigError("missing required LLM settings: " + ", ".join(missing))
+        if self.vision_mode == "separate":
+            vision_missing = [
+                name
+                for name, value in (
+                    ("VISION_API_KEY", self.vision_api_key),
+                    ("VISION_BASE_URL", self.vision_base_url),
+                    ("VISION_MODEL", self.vision_model),
+                )
+                if not value
+            ]
+            if vision_missing:
+                raise ConfigError("missing required vision settings: " + ", ".join(vision_missing))
 
     def validate_for_bridge(self) -> None:
         if self.bridge_host not in {"127.0.0.1", "localhost", "::1"} and not self.napcat_event_token:

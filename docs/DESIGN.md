@@ -356,3 +356,21 @@ MEMORY_DB=./.local/memory.sqlite3
 ### 为什么把决策和语言生成分开
 
 “要不要回复”与“具体怎么说”是两个不同问题。分开以后，可以用便宜快速的模型做决策，用更强的模型生成回复，也能在模型异常时安全地选择不回复。
+# Image pipeline
+
+Image handling is deliberately split from chat generation:
+
+```text
+OneBot image segment
+  -> ImageResolver (data URL / URL / local path / NapCat get_image)
+  -> bounded image data URL
+  -> direct main model, or separate vision model
+  -> normal chat model
+```
+
+`VISION_MODE=off` ignores images. `direct` uses the OpenAI-compatible
+multimodal message shape and therefore requires the main model to support
+vision. `separate` sends the image to a second provider and appends its short
+description to the normal text prompt. This is the safer default for a
+text-only main model. Image downloads are restricted to HTTP(S), are capped at
+10 MiB, and failures degrade to text-only processing.

@@ -370,3 +370,30 @@ python -m unittest discover -q
 - 模型空回复不会发空消息。
 - 重启后不会启动两个 Bridge。
 - `.env.local`、图片、SQLite 和聊天记录不会进入 Git。
+# Optional image understanding
+
+If QQ images arrive as `[图片]` but the reply acts as if no image was sent,
+there are two common causes: the OneBot adapter only supplied an image file
+identifier, or the selected chat model is text-only. The bridge now resolves
+the identifier through NapCat and lets you choose a vision strategy.
+
+Add this to `.env.local`:
+
+```dotenv
+VISION_MODE=separate
+VISION_API_KEY=the-key-for-your-vision-provider
+VISION_BASE_URL=https://vision-provider.example/v1
+VISION_MODEL=the-vision-model-name
+VISION_MAX_TOKENS=512
+VISION_TIMEOUT_SECONDS=30
+```
+
+Use `direct` only when the main `LLM_MODEL` explicitly supports image input.
+Use `off` to disable image requests completely. In `separate` mode the vision
+model describes visible content first, and the main model receives that
+description as ordinary text. The actual image is not forwarded to the text
+model. Restart the bot service and bridge after changing `.env.local`.
+
+The resolver accepts data URLs, HTTP(S) URLs, local paths, and NapCat's
+`get_image` response. It limits downloads to 10 MiB. A failed image lookup is
+logged and the message continues as text instead of becoming an empty reply.

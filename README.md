@@ -1,5 +1,30 @@
 # OneBot LLM Bridge
 
+## Image understanding
+
+Image messages are resolved from common OneBot/NapCat forms (data URL, URL,
+local path, or NapCat `get_image`) and size-limited before being sent to a
+model. The feature is optional:
+
+```dotenv
+# off      ignore images
+# direct   send images to the main LLM; it must support vision
+# separate use a second vision-capable LLM, then give its description to the
+#         normal chat model; useful when the main model is text-only
+VISION_MODE=separate
+VISION_API_KEY=vision-provider-key
+VISION_BASE_URL=https://vision-provider.example/v1
+VISION_MODEL=vision-model-name
+VISION_MAX_TOKENS=512
+VISION_TIMEOUT_SECONDS=30
+```
+
+`separate` is the recommended mode for a text-only chat model such as a
+DeepSeek text endpoint. It makes two requests only when a message contains an
+image. If an image cannot be downloaded or decoded, the bridge logs a short
+failure and continues with the text part of the message. It never sends the
+NapCat access token to the model provider.
+
 一个面向普通用户和开发者的通用 QQ AI Bot 框架。
 
 它通过 [OneBot 11](https://github.com/botuniverse/onebot-11) 接入 NapCat、LLOneBot 等 QQ 客户端，再把消息交给 OpenAI 兼容接口或其他模型服务。项目不绑定任何人的人设、QQ 号、群号和聊天记录，复制配置后即可开始使用。

@@ -49,3 +49,23 @@ class ConfigTests(unittest.TestCase):
     def test_bot_validation_requires_model_settings(self) -> None:
         with self.assertRaises(ConfigError):
             Settings.from_values({}).validate_for_bot()
+
+    def test_separate_vision_settings_are_loaded_and_validated(self) -> None:
+        settings = Settings.from_values(
+            {
+                "LLM_API_KEY": "chat-key",
+                "LLM_BASE_URL": "https://chat.example/v1",
+                "LLM_MODEL": "text-model",
+                "VISION_MODE": "separate",
+                "VISION_API_KEY": "vision-key",
+                "VISION_BASE_URL": "https://vision.example/v1/",
+                "VISION_MODEL": "vision-model",
+            }
+        )
+        settings.validate_for_bot()
+        self.assertEqual(settings.vision_base_url, "https://vision.example/v1")
+        self.assertEqual(settings.vision_model, "vision-model")
+
+    def test_invalid_vision_mode_is_rejected(self) -> None:
+        with self.assertRaises(ConfigError):
+            Settings.from_values({"VISION_MODE": "maybe"})

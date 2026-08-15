@@ -24,6 +24,15 @@ class FakeNapCat:
         return {"status": "ok"}
 
 
+class FakeImageResolver:
+    def __init__(self):
+        self.segments = []
+
+    def resolve_segments(self, segments):
+        self.segments = list(segments)
+        return ["data:image/png;base64,abc"]
+
+
 class BridgeTests(unittest.TestCase):
     def settings(self):
         return Settings.from_values(
@@ -148,3 +157,34 @@ class BridgeTests(unittest.TestCase):
         }
         self.assertTrue(bridge.handle_event(event)["handled"])
         self.assertEqual(napcat.quoted, [("group", "999", "21")])
+
+    def test_image_segments_are_resolved_before_bot_request(self):
+        settings = Settings.from_values(
+            {
+                "LLM_API_KEY": "key",
+                "LLM_BASE_URL": "https://example.test/v1",
+                "LLM_MODEL": "chat",
+                "VISION_MODE": "direct",
+            }
+        )
+        napcat = FakeNapCat()
+        resolver = FakeImageResolver()
+        calls = []
+        bridge = Bridge(
+            settings,
+            napcat=napcat,
+            image_resolver=resolver,
+            bot_request=lambda payload: calls.append(payload) or {"bubbles": ["看到了"]},
+        )
+        result = bridge.handle_event(
+            {
+                "post_type": "message",
+                "message_type": "private",
+                "user_id": 123,
+                "message_id": 1,
+                "message": [{"type": "image", "data": {"file": "photo"}}],
+            }
+        )
+        self.assertTrue(result["handled"])
+        self.assertEqual(calls[0]["images"], ["data:image/png;base64,abc"])
+        self.assertEqual(resolver.segments[0]["type"], "image")

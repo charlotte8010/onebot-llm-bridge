@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 from .napcat import NapCatClient, NapCatError
 from .config import Settings
 from .formatting import split_bubbles
+from .images import ImageResolver
 from .models import EventError, NormalizedMessage, is_meaningful, json_context
 from .policy import decide_reply
 from .providers import OpenAICompatibleProvider, ProviderError
@@ -78,7 +79,13 @@ class JsonHandler(BaseHTTPRequestHandler):
 
 
 class BotService:
-    def __init__(self, settings: Settings, *, provider: OpenAICompatibleProvider | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        provider: OpenAICompatibleProvider | None = None,
+        vision_provider: OpenAICompatibleProvider | None = None,
+    ) -> None:
         settings.validate_for_bot()
         self.settings = settings
         self.provider = provider or OpenAICompatibleProvider(
@@ -88,6 +95,16 @@ class BotService:
             max_tokens=settings.llm_max_tokens,
             timeout=settings.llm_timeout_seconds,
         )
+        if settings.vision_mode == "separate":
+            self.vision_provider = vision_provider or OpenAICompatibleProvider(
+                api_key=settings.vision_api_key,
+                base_url=settings.vision_base_url,
+                model=settings.vision_model,
+                max_tokens=settings.vision_max_tokens,
+                timeout=settings.vision_timeout_seconds,
+            )
+        else:
+            self.vision_provider = vision_provider
 
     def persona(self) -> str:
         if not self.settings.persona_file:
@@ -112,9 +129,29 @@ class BotService:
         if persona:
             system += "\n\nUser-provided persona:\n" + persona
         user_prompt = f"Recent context:\n{context_text}\n\nNew message:\n{message}"
+        images = [str(item) for item in payload.get("images", []) if isinstance(item, str)]
+        vision_note = ""
+        if images and self.settings.vision_mode == "separate":
+            if self.vision_provider is None:
+                raise ProviderError("vision provider is not configured")
+            vision_note = self.vision_provider.complete(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You describe images for a chat assistant. State only visible, useful details. "
+                            "Do not guess identities, text, events, or context that cannot be seen."
+                        ),
+                    },
+                    {"role": "user", "content": "Describe the attached image(s) briefly for the next reply."},
+                ],
+                images=images,
+            )
+            user_prompt += "\n\nImage understanding from a separate vision model:\n" + vision_note
+            images = []
         content = self.provider.complete(
             [{"role": "system", "content": system}, {"role": "user", "content": user_prompt}],
-            images=[str(item) for item in payload.get("images", []) if isinstance(item, str)],
+            images=images if self.settings.vision_mode == "direct" else [],
         )
         bubbles = split_bubbles(content)
         if not bubbles:
@@ -178,6 +215,7 @@ class Bridge:
         *,
         napcat: NapCatClient | None = None,
         bot_request: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
+        image_resolver: ImageResolver | None = None,
     ) -> None:
         settings.validate_for_bridge()
         self.settings = settings
@@ -185,6 +223,7 @@ class Bridge:
             settings.napcat_api_url,
             settings.napcat_access_token,
         )
+        self.image_resolver = image_resolver or ImageResolver(self.napcat)
         self.bot_request = bot_request or (
             lambda payload: _post_json(
                 f"http://{settings.bot_service_host}:{settings.bot_service_port}/reply",
@@ -232,11 +271,15 @@ class Bridge:
     ) -> dict[str, Any]:
         first = messages[0]
         with self._locks[first.conversation_key]:
+            images: list[str] = []
+            if self.settings.vision_mode != "off":
+                segments = [segment for item in messages for segment in item.segments]
+                images = self.image_resolver.resolve_segments(segments)
             payload = {
                 "message": "\n".join(item.text for item in messages if item.text),
                 "context": json.loads(json_context(context)),
                 "conversation": first.conversation_key,
-                "images": [],
+                "images": images,
             }
             self._set_typing(first.sender_id, True)
             try:

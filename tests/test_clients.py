@@ -37,6 +37,30 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(requests[0][0].get_header("Authorization"), "Bearer secret")
         self.assertIn("/chat/completions", requests[0][0].full_url)
 
+    def test_provider_encodes_images_as_openai_compatible_content(self) -> None:
+        requests = []
+
+        def opener(request, timeout):
+            requests.append(request)
+            return FakeResponse({"choices": [{"message": {"content": "看到了"}}]})
+
+        provider = OpenAICompatibleProvider(
+            api_key="secret",
+            base_url="https://example.test/v1",
+            model="vision-chat",
+            opener=opener,
+        )
+        provider.complete(
+            [{"role": "user", "content": "这是什么"}],
+            images=["data:image/png;base64,abc"],
+        )
+        payload = json.loads(requests[0].data.decode("utf-8"))
+        self.assertEqual(payload["messages"][0]["content"][1]["type"], "image_url")
+        self.assertEqual(
+            payload["messages"][0]["content"][1]["image_url"]["url"],
+            "data:image/png;base64,abc",
+        )
+
     def test_napcat_client_sends_access_token_and_action(self) -> None:
         requests = []
 
