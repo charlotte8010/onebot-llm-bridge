@@ -217,6 +217,16 @@ class ControlPanel(tk.Tk):
         style.configure("Title.TLabel", font=("Microsoft YaHei UI", 20, "bold"))
         style.configure("Subtitle.TLabel", foreground="#666666")
         style.configure("Status.TLabel", padding=(8, 7))
+        style.configure(
+            "Panel.Vertical.TScrollbar",
+            width=10,
+            troughcolor="#eef1f5",
+            background="#b9c0ca",
+            bordercolor="#eef1f5",
+            arrowcolor="#68717d",
+        )
+        style.configure("TNotebook", tabmargins=(0, 0, 0, 0))
+        style.configure("TNotebook.Tab", padding=(18, 8))
         outer = ttk.Frame(self, padding=14)
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text="OneBot LLM Bridge 控制台", style="Title.TLabel").pack(anchor="w")
@@ -324,8 +334,20 @@ class ControlPanel(tk.Tk):
         self.log = tk.Text(log_frame, height=6, wrap="none", state="disabled", font=("Cascadia Mono", 10))
         self.log.pack(fill="both", expand=True)
 
-    def _scrollable_tab(self, notebook: ttk.Notebook) -> tuple[tk.Canvas, ttk.Frame]:
-        canvas = tk.Canvas(notebook, highlightthickness=0, borderwidth=0)
+    def _scrollable_tab(self, notebook: ttk.Notebook) -> tuple[ttk.Frame, ttk.Frame]:
+        tab = ttk.Frame(notebook)
+        tab.columnconfigure(0, weight=1)
+        tab.rowconfigure(0, weight=1)
+        canvas = tk.Canvas(tab, highlightthickness=0, borderwidth=0)
+        scrollbar = ttk.Scrollbar(
+            tab,
+            orient="vertical",
+            command=canvas.yview,
+            style="Panel.Vertical.TScrollbar",
+        )
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns", padx=(6, 0))
         content = ttk.Frame(canvas, padding=8)
         window = canvas.create_window((0, 0), window=content, anchor="nw")
         content.bind(
@@ -354,7 +376,7 @@ class ControlPanel(tk.Tk):
         canvas.bind_all("<MouseWheel>", scroll, add="+")
         canvas.bind_all("<Button-4>", scroll, add="+")
         canvas.bind_all("<Button-5>", scroll, add="+")
-        return canvas, content
+        return tab, content
 
     def _label(self, parent: ttk.Frame, row: int, column: int, text: str) -> None:
         ttk.Label(parent, text=text).grid(row=row, column=column, sticky="w", padx=(0, 8), pady=4)
