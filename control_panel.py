@@ -236,11 +236,28 @@ class ControlPanel(tk.Tk):
             style="Subtitle.TLabel",
         ).pack(anchor="w", pady=(3, 10))
 
-        notebook = ttk.Notebook(outer)
-        notebook.pack(fill="both", expand=True)
-        model_tab, model_content = self._scrollable_tab(notebook)
-        behavior_tab, behavior_content = self._scrollable_tab(notebook)
-        network_tab, network_content = self._scrollable_tab(notebook)
+        tab_area = ttk.Frame(outer)
+        tab_area.pack(fill="both", expand=True)
+        tab_area.columnconfigure(0, weight=1)
+        tab_area.rowconfigure(0, weight=1)
+        notebook = ttk.Notebook(tab_area)
+        notebook.grid(row=0, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(
+            tab_area,
+            orient="vertical",
+            command=lambda *args: self._active_canvas.yview(*args),
+            style="Panel.Vertical.TScrollbar",
+        )
+        scrollbar.grid(row=0, column=1, sticky="ns", padx=(6, 0))
+        model_tab, model_content, model_canvas = self._scrollable_tab(notebook)
+        behavior_tab, behavior_content, behavior_canvas = self._scrollable_tab(notebook)
+        network_tab, network_content, network_canvas = self._scrollable_tab(notebook)
+        self._tab_canvases = [model_canvas, behavior_canvas, network_canvas]
+        self._active_canvas = model_canvas
+        self._settings_scrollbar = scrollbar
+        for canvas in self._tab_canvases:
+            canvas.configure(yscrollcommand=scrollbar.set)
+        notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
         notebook.add(model_tab, text="模型与识图")
         notebook.add(behavior_tab, text="回复与记忆")
         notebook.add(network_tab, text="连接与服务")
@@ -334,20 +351,12 @@ class ControlPanel(tk.Tk):
         self.log = tk.Text(log_frame, height=6, wrap="none", state="disabled", font=("Cascadia Mono", 10))
         self.log.pack(fill="both", expand=True)
 
-    def _scrollable_tab(self, notebook: ttk.Notebook) -> tuple[ttk.Frame, ttk.Frame]:
+    def _scrollable_tab(self, notebook: ttk.Notebook) -> tuple[ttk.Frame, ttk.Frame, tk.Canvas]:
         tab = ttk.Frame(notebook)
         tab.columnconfigure(0, weight=1)
         tab.rowconfigure(0, weight=1)
         canvas = tk.Canvas(tab, highlightthickness=0, borderwidth=0)
-        scrollbar = ttk.Scrollbar(
-            tab,
-            orient="vertical",
-            command=canvas.yview,
-            style="Panel.Vertical.TScrollbar",
-        )
-        canvas.configure(yscrollcommand=scrollbar.set)
         canvas.grid(row=0, column=0, sticky="nsew")
-        scrollbar.grid(row=0, column=1, sticky="ns", padx=(6, 0))
         content = ttk.Frame(canvas, padding=8)
         window = canvas.create_window((0, 0), window=content, anchor="nw")
         content.bind(
@@ -376,7 +385,13 @@ class ControlPanel(tk.Tk):
         canvas.bind_all("<MouseWheel>", scroll, add="+")
         canvas.bind_all("<Button-4>", scroll, add="+")
         canvas.bind_all("<Button-5>", scroll, add="+")
-        return tab, content
+        return tab, content, canvas
+
+    def _on_tab_changed(self, _event: tk.Event[tk.Misc]) -> None:
+        notebook = _event.widget
+        index = notebook.index(notebook.select())
+        self._active_canvas = self._tab_canvases[index]
+        self._settings_scrollbar.set(*self._active_canvas.yview())
 
     def _label(self, parent: ttk.Frame, row: int, column: int, text: str) -> None:
         ttk.Label(parent, text=text).grid(row=row, column=column, sticky="w", padx=(0, 8), pady=4)
