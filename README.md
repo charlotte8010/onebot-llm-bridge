@@ -38,9 +38,9 @@ OneBot LLM Bridge 把这些问题拆成可配置模块，默认提供一套稳�
 - `app.py`：监听 OneBot 11 HTTP Client 事件的 Bridge。
 - `bot_service.py`：调用 OpenAI 兼容模型的本地服务。
 - `onebot_llm_bridge/`：配置、事件标准化、回复策略、气泡格式化和 NapCat 动作客户端。
-- `tests/`：15 个不依赖真实 QQ 和 API Key 的单元测试。
+- `tests/`：17 个不依赖真实 QQ 和 API Key 的单元测试。
 
-当前版本已经可以跑通“私聊文本 -> 模型 -> NapCat 发回”的基本链路；消息防抖、图片下载、长期记忆和控制台仍按下方路线逐步加入。
+当前版本已经可以跑通“私聊文本 -> 防抖合并 -> 模型 -> NapCat 发回”的基本链路；图片下载、长期记忆和控制台仍按下方路线逐步加入。
 
 在填写 `examples/.env.example` 的副本后，可以分别启动：
 

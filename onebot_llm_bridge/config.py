@@ -97,6 +97,7 @@ class Settings:
     bot_service_token: str = ""
     group_mode: str = "mention"
     group_allowlist: frozenset[str] = frozenset()
+    debounce_seconds: float = 3.0
     context_messages: int = 20
     persona_file: str = ""
 
@@ -127,6 +128,7 @@ class Settings:
             bot_service_token=_text(values, "BOT_SERVICE_TOKEN"),
             group_mode=group_mode,
             group_allowlist=allowlist,
+            debounce_seconds=_float(values, "DEBOUNCE_SECONDS", 3.0, 0.0, 60.0),
             context_messages=_int(values, "CONTEXT_MESSAGES", 20, 0, 100),
             persona_file=_text(values, "PERSONA_FILE"),
         )
@@ -147,4 +149,3 @@ class Settings:
     def validate_for_bridge(self) -> None:
         if self.bridge_host not in {"127.0.0.1", "localhost", "::1"} and not self.napcat_event_token:
             raise ConfigError("NAPCAT_EVENT_TOKEN is required when BRIDGE_HOST is not loopback")
-

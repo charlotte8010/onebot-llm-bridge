@@ -22,6 +22,13 @@ from .providers import OpenAICompatibleProvider, ProviderError
 MAX_BODY_BYTES = 1_048_576
 
 
+class PendingBatch:
+    def __init__(self, messages: list[NormalizedMessage], context: list[NormalizedMessage]) -> None:
+        self.messages = messages
+        self.context = context
+        self.timer: threading.Timer | None = None
+
+
 def _bearer_matches(header: str, expected: str) -> bool:
     if not expected:
         return True
@@ -181,37 +188,106 @@ class Bridge:
             lambda: deque(maxlen=settings.context_messages)
         )
         self._locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
+        self._state_lock = threading.RLock()
+        self._pending: dict[str, PendingBatch] = {}
 
-    def handle_event(self, event: Mapping[str, Any]) -> dict[str, Any]:
-        message = NormalizedMessage.from_onebot(event)
-        decision = decide_reply(
+    def _decision(self, message: NormalizedMessage):
+        return decide_reply(
             message,
             group_mode=self.settings.group_mode,
             group_allowlist=self.settings.group_allowlist,
             address_names=("bot",),
         )
-        context = self._contexts[message.conversation_key]
-        context.append(message)
-        if not is_meaningful(message) or not decision.should_reply:
-            return {"handled": False, "reason": decision.reason}
-        with self._locks[message.conversation_key]:
+
+    def _process_batch(
+        self,
+        messages: list[NormalizedMessage],
+        context: list[NormalizedMessage],
+    ) -> dict[str, Any]:
+        first = messages[0]
+        with self._locks[first.conversation_key]:
             payload = {
-                "message": message.text,
-                "context": json.loads(json_context(list(context))),
-                "conversation": message.conversation_key,
+                "message": "\n".join(item.text for item in messages if item.text),
+                "context": json.loads(json_context(context)),
+                "conversation": first.conversation_key,
                 "images": [],
             }
             result = self.bot_request(payload)
             raw_bubbles = result.get("bubbles")
-            bubbles = [str(item).strip() for item in raw_bubbles if str(item).strip()] if isinstance(raw_bubbles, list) else split_bubbles(str(result.get("reply", "")))
+            bubbles = (
+                [str(item).strip() for item in raw_bubbles if str(item).strip()]
+                if isinstance(raw_bubbles, list)
+                else split_bubbles(str(result.get("reply", "")))
+            )
             if not bubbles:
                 return {"handled": False, "reason": "empty_reply"}
             for bubble in bubbles:
-                if message.conversation_type == "private":
-                    self.napcat.send_private(message.conversation_id, bubble)
+                if first.conversation_type == "private":
+                    self.napcat.send_private(first.conversation_id, bubble)
                 else:
-                    self.napcat.send_group(message.conversation_id, bubble)
-            return {"handled": True, "reason": decision.reason, "bubbles": len(bubbles)}
+                    self.napcat.send_group(first.conversation_id, bubble)
+            return {"handled": True, "reason": "reply", "bubbles": len(bubbles)}
+
+    def handle_event(self, event: Mapping[str, Any]) -> dict[str, Any]:
+        message = NormalizedMessage.from_onebot(event)
+        decision = self._decision(message)
+        if not is_meaningful(message) or not decision.should_reply:
+            return {"handled": False, "reason": decision.reason}
+        with self._state_lock:
+            context = list(self._contexts[message.conversation_key])
+            self._contexts[message.conversation_key].append(message)
+        result = self._process_batch([message], context)
+        result["reason"] = decision.reason
+        return result
+
+    def enqueue_event(self, event: Mapping[str, Any]) -> dict[str, Any]:
+        """Accept an event quickly and process it after the debounce window."""
+        message = NormalizedMessage.from_onebot(event)
+        decision = self._decision(message)
+        if not is_meaningful(message) or not decision.should_reply:
+            return {"accepted": False, "reason": decision.reason}
+        key = message.conversation_key
+        with self._state_lock:
+            context = list(self._contexts[key])
+            self._contexts[key].append(message)
+            batch = self._pending.get(key)
+            if batch is None:
+                batch = PendingBatch([message], context)
+                self._pending[key] = batch
+                self._schedule_batch(key, self.settings.debounce_seconds)
+            else:
+                batch.messages.append(message)
+                if message.conversation_type == "private":
+                    self._schedule_batch(key, self.settings.debounce_seconds)
+            batch_size = len(batch.messages)
+        return {"accepted": True, "reason": decision.reason, "batch_size": batch_size}
+
+    def _schedule_batch(self, key: str, delay: float) -> None:
+        batch = self._pending[key]
+        if batch.timer is not None:
+            batch.timer.cancel()
+        timer = threading.Timer(delay, self._flush_batch, args=(key,))
+        timer.daemon = True
+        batch.timer = timer
+        timer.start()
+
+    def _flush_batch(self, key: str) -> None:
+        with self._state_lock:
+            batch = self._pending.pop(key, None)
+        if batch is None:
+            return
+        try:
+            self._process_batch(batch.messages, batch.context)
+        except Exception as exc:
+            print(f"background batch failed: {type(exc).__name__}: {exc}")
+
+    def shutdown(self) -> None:
+        with self._state_lock:
+            batches = list(self._pending.values())
+            self._pending.clear()
+        for batch in batches:
+            if batch.timer is not None:
+                batch.timer.cancel()
 
 
 class BridgeHandler(JsonHandler):
@@ -230,7 +306,7 @@ class BridgeHandler(JsonHandler):
             self.write_json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "unauthorized"})
             return
         try:
-            result = server.bridge.handle_event(self.read_json())
+            result = server.bridge.enqueue_event(self.read_json())
         except (EventError, ValueError) as exc:
             self.write_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
             return
