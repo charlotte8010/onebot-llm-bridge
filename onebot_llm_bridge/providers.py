@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -31,6 +32,7 @@ class OpenAICompatibleProvider:
         model: str,
         max_tokens: int = 1024,
         timeout: float = 60.0,
+        max_retries: int = 2,
         opener: Callable[..., Any] = urlopen,
     ) -> None:
         self.api_key = api_key
@@ -38,7 +40,23 @@ class OpenAICompatibleProvider:
         self.model = model
         self.max_tokens = max_tokens
         self.timeout = timeout
+        self.max_retries = max(0, min(int(max_retries), 4))
         self.opener = opener
+
+    def _read(self, request: Request) -> str:
+        """Read a provider response, retrying only transient transport failures."""
+        for attempt in range(self.max_retries + 1):
+            try:
+                with self.opener(request, timeout=self.timeout) as response:
+                    return response.read().decode("utf-8")
+            except HTTPError as exc:
+                if exc.code not in {408, 425, 429, 500, 502, 503, 504} or attempt >= self.max_retries:
+                    raise
+            except (URLError, TimeoutError, OSError):
+                if attempt >= self.max_retries:
+                    raise
+            time.sleep(min(0.25 * (2**attempt), 1.0))
+        raise ProviderError("model provider request failed")
 
     def complete(self, messages: list[dict[str, Any]], images: list[str] | None = None) -> str:
         request_messages = [dict(message) for message in messages]
@@ -64,8 +82,7 @@ class OpenAICompatibleProvider:
             method="POST",
         )
         try:
-            with self.opener(request, timeout=self.timeout) as response:
-                raw = response.read().decode("utf-8")
+            raw = self._read(request)
         except HTTPError as exc:
             raise ProviderError(f"model provider returned HTTP {exc.code}") from exc
         except (URLError, TimeoutError, OSError) as exc:
@@ -89,8 +106,7 @@ class OpenAICompatibleProvider:
             method="GET",
         )
         try:
-            with self.opener(request, timeout=self.timeout) as response:
-                raw = response.read().decode("utf-8")
+            raw = self._read(request)
         except HTTPError as exc:
             raise ProviderError(f"model listing returned HTTP {exc.code}") from exc
         except (URLError, TimeoutError, OSError) as exc:

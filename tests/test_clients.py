@@ -1,5 +1,6 @@
 import json
 import unittest
+from urllib.error import URLError
 
 from onebot_llm_bridge.napcat import NapCatClient
 from onebot_llm_bridge.providers import OpenAICompatibleProvider
@@ -20,6 +21,25 @@ class FakeResponse:
 
 
 class ClientTests(unittest.TestCase):
+    def test_provider_retries_transient_network_failure(self) -> None:
+        attempts = []
+
+        def opener(request, timeout):
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise URLError("temporary")
+            return FakeResponse({"choices": [{"message": {"content": "ok"}}]})
+
+        provider = OpenAICompatibleProvider(
+            api_key="secret",
+            base_url="https://example.test/v1",
+            model="chat",
+            max_retries=1,
+            opener=opener,
+        )
+        self.assertEqual(provider.complete([{"role": "user", "content": "hi"}]), "ok")
+        self.assertEqual(len(attempts), 2)
+
     def test_provider_sends_bearer_and_reads_content(self) -> None:
         requests = []
 

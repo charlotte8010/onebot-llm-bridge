@@ -10,6 +10,7 @@ import sys
 import threading
 import tkinter as tk
 import ctypes
+import zipfile
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Callable
@@ -18,6 +19,7 @@ from urllib.request import Request, urlopen
 from urllib.parse import urlsplit
 
 from onebot_llm_bridge.emoji_catalog import load_emoji_catalog
+from onebot_llm_bridge.backup import create_backup, restore_backup
 
 
 ROOT = Path(__file__).resolve().parent
@@ -1198,6 +1200,8 @@ class ControlPanel(tk.Tk):
         ttk.Button(primary_actions, text="启动 NapCat", command=self.start_napcat).pack(side="left", padx=(8, 0))
         self.diagnostics_button = ttk.Button(primary_actions, text="一键诊断", command=self.run_diagnostics)
         self.diagnostics_button.pack(side="left", padx=(8, 0))
+        ttk.Button(primary_actions, text="备份配置", command=self.backup_config).pack(side="left", padx=(8, 0))
+        ttk.Button(primary_actions, text="恢复配置", command=self.restore_config).pack(side="left", padx=(8, 0))
         secondary_actions = ttk.Frame(actions, style="Command.TFrame")
         secondary_actions.grid(row=0, column=1, sticky="e")
         ttk.Button(secondary_actions, text="重启全部", command=self.restart_all).pack(side="left")
@@ -2436,10 +2440,11 @@ class ControlPanel(tk.Tk):
         napcat_port = local_url_port(napcat_url, 3000)
         vision_mode = self.vision_mode.get()
         vision_model = self.vision_model.get()
+        napcat_access_token = self.napcat_access.get().strip()
         self._status_probe_in_flight = True
         threading.Thread(
             target=self._probe_status_worker,
-            args=(bot_port, bridge_port, napcat_url, napcat_port, vision_mode, vision_model),
+            args=(bot_port, bridge_port, napcat_url, napcat_port, napcat_access_token, vision_mode, vision_model),
             daemon=True,
         ).start()
         self.after(2000, self._refresh_status)
@@ -2450,12 +2455,20 @@ class ControlPanel(tk.Tk):
         bridge_port: int | None,
         napcat_url: str,
         napcat_port: int | None,
+        napcat_access_token: str,
         vision_mode: str,
         vision_model: str,
     ) -> None:
         bot_running = bot_port is not None and port_open(bot_port)
         bridge_running = bridge_port is not None and port_open(bridge_port)
         napcat_running = napcat_port is not None and port_open(napcat_port)
+        napcat_api_ready = False
+        if napcat_running and napcat_url:
+            try:
+                probe_napcat(napcat_url, napcat_access_token)
+                napcat_api_ready = True
+            except (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
+                napcat_api_ready = False
         self.after(
             0,
             lambda: self._apply_status(
@@ -2466,6 +2479,7 @@ class ControlPanel(tk.Tk):
                 napcat_url,
                 napcat_port,
                 napcat_running,
+                napcat_api_ready,
                 vision_mode,
                 vision_model,
             ),
@@ -2480,6 +2494,7 @@ class ControlPanel(tk.Tk):
         napcat_url: str,
         napcat_port: int | None,
         napcat_running: bool,
+        napcat_api_ready: bool,
         vision_mode: str,
         vision_model: str,
     ) -> None:
@@ -2503,8 +2518,12 @@ class ControlPanel(tk.Tk):
             self.napcat_status.configure(text="NapCat · 远程地址", style="StatusInfo.TLabel")
         else:
             self.napcat_status.configure(
-                text=f"NapCat · {'运行中' if napcat_running else '未运行'}",
-                style="StatusOnline.TLabel" if napcat_running else "StatusOffline.TLabel",
+                text=(
+                    "NapCat · API 可用"
+                    if napcat_api_ready
+                    else ("NapCat · 端口已开但 API 不可用" if napcat_running else "NapCat · 未运行")
+                ),
+                style="StatusOnline.TLabel" if napcat_api_ready else "StatusOffline.TLabel",
             )
 
     def _drain_logs(self) -> None:
@@ -2531,6 +2550,37 @@ class ControlPanel(tk.Tk):
         self.log.configure(state="normal")
         self.log.delete("1.0", "end")
         self.log.configure(state="disabled")
+
+    def backup_config(self) -> None:
+        try:
+            path = create_backup(ROOT)
+        except (OSError, ValueError, zipfile.BadZipFile) as exc:
+            self._append_log(format_panel_error("备份配置", exc))
+            return
+        self._append_log(f"配置备份已创建：{path}")
+        messagebox.showinfo("备份完成", f"已备份到：\n{path}", parent=self)
+
+    def restore_config(self) -> None:
+        selected = filedialog.askopenfilename(
+            parent=self,
+            title="选择配置备份",
+            filetypes=[("ZIP 备份", "*.zip"), ("所有文件", "*.*")],
+        )
+        if not selected:
+            return
+        if not messagebox.askyesno(
+            "恢复配置",
+            "恢复会覆盖当前本地配置和 Persona/词典文件，运行中的服务不会自动重启。确定继续吗？",
+            parent=self,
+        ):
+            return
+        try:
+            restored = restore_backup(ROOT, Path(selected))
+        except (OSError, ValueError, zipfile.BadZipFile) as exc:
+            self._append_log(format_panel_error("恢复配置", exc))
+            return
+        self._append_log(f"已恢复 {len(restored)} 个文件；请重新打开控制台或重新选择配置")
+        messagebox.showinfo("恢复完成", "配置已恢复。请检查界面内容，确认后手动重启相关服务。", parent=self)
 
     def _close(self) -> None:
         if messagebox.askyesno("退出", "是否同时停止本控制台启动的服务？", parent=self):

@@ -7,6 +7,7 @@ import re
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict, deque
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -24,6 +25,7 @@ from .memory import SQLiteMemoryStore
 from .models import EventError, NormalizedMessage, is_meaningful, json_context
 from .policy import decide_reply
 from .providers import OpenAICompatibleProvider, ProviderError
+from .quality import sanitize_bubbles
 from .remote_memory import RemoteMemoryError, RemoteMemoryStore, SupabaseRestClient
 from .tools import ToolRegistry, is_time_query, parse_tool_calls
 
@@ -68,6 +70,7 @@ class PendingBatch:
         self.context = context
         self.mode = mode
         self.reply_to = reply_to
+        self.created_at = time.monotonic()
         self.timer: threading.Timer | None = None
 
 
@@ -293,12 +296,16 @@ class BotService:
             ]
             content = self.provider.complete(messages, images=[])
         bubbles, reaction_id = parse_reply_actions(content)
+        bubbles, quality_warnings = sanitize_bubbles(bubbles)
         reaction_id = resolve_emoji(reaction_id, self.emoji_catalog)
         if self.settings.reaction_mode == "off":
             reaction_id = None
         if not bubbles and not reaction_id:
             raise ProviderError("model reply contained no usable bubbles")
-        return {"reply": content, "bubbles": bubbles, "reaction_id": reaction_id}
+        result = {"reply": content, "bubbles": bubbles, "reaction_id": reaction_id}
+        if quality_warnings:
+            result["quality_warnings"] = quality_warnings
+        return result
 
     def summarize(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         context = payload.get("context", [])
@@ -466,6 +473,9 @@ def _post_json(url: str, payload: Mapping[str, Any], token: str, timeout: float 
 
 
 class Bridge:
+    MAX_BATCH_WINDOW_SECONDS = 12.0
+    MAX_BATCH_MESSAGES = 20
+    REMOTE_CACHE_SECONDS = 8.0
     def __init__(
         self,
         settings: Settings,
@@ -521,8 +531,25 @@ class Bridge:
         self._loaded_contexts: set[str] = set()
         self._active_timers: dict[str, threading.Timer] = {}
         self._summary_timers: dict[str, threading.Timer] = {}
+        self._metrics_lock = threading.Lock()
+        self._metrics: dict[str, int | float] = {
+            "events_received": 0,
+            "events_accepted": 0,
+            "events_ignored": 0,
+            "batches_processed": 0,
+            "batch_failures": 0,
+            "last_event_at": 0.0,
+        }
         self._remote_groups = frozenset()
         self._remote_groups_checked_at = 0.0
+        self._remote_executor = (
+            ThreadPoolExecutor(max_workers=2, thread_name_prefix="remote-memory")
+            if self.remote_memory is not None
+            else None
+        )
+        self._remote_cache_lock = threading.RLock()
+        self._remote_context_cache: dict[str, tuple[float, Any]] = {}
+        self._remote_facts_cache: dict[str, tuple[float, tuple[str, ...]]] = {}
         self._summary_request = summary_request or (
             lambda payload: _post_json(
                 f"http://{settings.bot_service_host}:{settings.bot_service_port}/summarize",
@@ -543,6 +570,16 @@ class Bridge:
         self._shutdown = False
         for target_type in self._active_target_types():
             self._schedule_active_message(target_type)
+
+    def _metric(self, name: str, amount: int = 1) -> None:
+        with self._metrics_lock:
+            self._metrics[name] = int(self._metrics.get(name, 0)) + amount
+            if name == "events_received":
+                self._metrics["last_event_at"] = time.time()
+
+    def metrics(self) -> dict[str, int | float]:
+        with self._metrics_lock:
+            return dict(self._metrics)
 
     def _context_for(self, key: str) -> deque[NormalizedMessage]:
         context = self._contexts[key]
@@ -646,10 +683,46 @@ class Bridge:
     def _ingest_remote(self, message: NormalizedMessage) -> None:
         if self.remote_memory is None or not is_meaningful(message):
             return
+        with self._remote_cache_lock:
+            self._remote_context_cache.pop(message.conversation_key, None)
+            self._remote_facts_cache.pop(f"conversation:{message.conversation_key}", None)
+        if self._remote_executor is None:
+            return
+        self._remote_executor.submit(self._write_remote_message, message)
+
+    def _write_remote_message(self, message: NormalizedMessage) -> None:
+        if self.remote_memory is None:
+            return
         try:
             self.remote_memory.ingest(message)
         except RemoteMemoryError as exc:
             print(f"remote memory ingest failed: {exc.code}: {exc}")
+
+    def _cached_remote_context(self, conversation_key: str, limit: int) -> Any:
+        if self.remote_memory is None:
+            return None
+        now = time.monotonic()
+        with self._remote_cache_lock:
+            cached = self._remote_context_cache.get(conversation_key)
+            if cached is not None and now - cached[0] < self.REMOTE_CACHE_SECONDS:
+                return cached[1]
+        value = self.remote_memory.load_context(conversation_key, limit)
+        with self._remote_cache_lock:
+            self._remote_context_cache[conversation_key] = (time.monotonic(), value)
+        return value
+
+    def _cached_remote_facts(self, scope_key: str) -> list[str]:
+        if self.remote_memory is None:
+            return []
+        now = time.monotonic()
+        with self._remote_cache_lock:
+            cached = self._remote_facts_cache.get(scope_key)
+            if cached is not None and now - cached[0] < self.REMOTE_CACHE_SECONDS:
+                return list(cached[1])
+        value = tuple(self.remote_memory.load_facts(scope_key))
+        with self._remote_cache_lock:
+            self._remote_facts_cache[scope_key] = (time.monotonic(), value)
+        return list(value)
 
     def _set_typing(self, user_id: str, active: bool) -> None:
         if not self.settings.typing_status or not hasattr(self.napcat, "set_input_status"):
@@ -718,7 +791,7 @@ class Bridge:
             remote_facts: list[str] = []
             if self.remote_memory is not None:
                 try:
-                    remote_context = self.remote_memory.load_context(
+                    remote_context = self._cached_remote_context(
                         first.conversation_key,
                         max(self.settings.context_messages, len(context), 1),
                     )
@@ -727,8 +800,8 @@ class Bridge:
                         item for item in remote_context.messages if item.message_id not in current_ids
                     ]
                     summary = remote_context.summary
-                    remote_facts.extend(self.remote_memory.load_facts(f"user:{first.sender_id}"))
-                    remote_facts.extend(self.remote_memory.load_facts(f"conversation:{first.conversation_key}"))
+                    remote_facts.extend(self._cached_remote_facts(f"user:{first.sender_id}"))
+                    remote_facts.extend(str(item) for item in remote_context.facts)
                 except RemoteMemoryError as exc:
                     print(f"remote memory context failed: {exc.code}: {exc}")
             local_facts = self.memory_store.load_facts(f"user:{first.sender_id}") if self.memory_store else []
@@ -746,11 +819,10 @@ class Bridge:
             finally:
                 self._set_typing(first.sender_id, False)
             raw_bubbles = result.get("bubbles")
-            bubbles = (
-                [str(item).strip() for item in raw_bubbles if str(item).strip()]
-                if isinstance(raw_bubbles, list)
-                else split_bubbles(str(result.get("reply", "")))
-            )
+            raw_items = raw_bubbles if isinstance(raw_bubbles, list) else split_bubbles(str(result.get("reply", "")))
+            bubbles, quality_warnings = sanitize_bubbles(raw_items)
+            if quality_warnings:
+                print(f"reply quality adjusted: {','.join(quality_warnings)}")
             if not bubbles:
                 reaction_id = str(result.get("reaction_id", "")).strip()
                 if reaction_id and self.settings.reaction_mode == "like":
@@ -850,6 +922,8 @@ class Bridge:
             if self.remote_memory is not None:
                 try:
                     self.remote_memory.add_fact(scope, fact, message.message_id)
+                    with self._remote_cache_lock:
+                        self._remote_facts_cache.pop(scope, None)
                 except RemoteMemoryError as exc:
                     print(f"remote memory fact write failed: {exc.code}: {exc}")
             acknowledgement = "记住了"
@@ -861,6 +935,8 @@ class Bridge:
             if self.remote_memory is not None:
                 try:
                     removed = self.remote_memory.remove_fact(scope, fact) or removed
+                    with self._remote_cache_lock:
+                        self._remote_facts_cache.pop(scope, None)
                 except RemoteMemoryError as exc:
                     print(f"remote memory fact delete failed: {exc.code}: {exc}")
             acknowledgement = "忘掉了" if removed else "我没有记过这个"
@@ -960,9 +1036,11 @@ class Bridge:
     def enqueue_event(self, event: Mapping[str, Any]) -> dict[str, Any]:
         """Accept an event quickly and process it after the debounce window."""
         message = NormalizedMessage.from_onebot(event)
+        self._metric("events_received")
         self._ingest_remote(message)
         decision = self._decision(message)
         if not is_meaningful(message) or not decision.should_reply:
+            self._metric("events_ignored")
             return {"accepted": False, "reason": decision.reason}
         memory_result = self._handle_memory_command(message, decision.mode)
         if memory_result is not None:
@@ -983,8 +1061,13 @@ class Bridge:
             else:
                 batch.messages.append(message)
                 if message.conversation_type == "private":
-                    self._schedule_batch(key, self.settings.debounce_delay())
+                    elapsed = time.monotonic() - batch.created_at
+                    remaining = max(0.0, self.MAX_BATCH_WINDOW_SECONDS - elapsed)
+                    self._schedule_batch(key, min(self.settings.debounce_delay(), remaining))
+                if len(batch.messages) >= self.MAX_BATCH_MESSAGES:
+                    self._schedule_batch(key, 0.0)
             batch_size = len(batch.messages)
+        self._metric("events_accepted")
         return {"accepted": True, "reason": decision.reason, "batch_size": batch_size}
 
     def _schedule_batch(self, key: str, delay: float) -> None:
@@ -1003,7 +1086,9 @@ class Bridge:
             return
         try:
             self._process_batch(batch.messages, batch.context, batch.mode, batch.reply_to)
+            self._metric("batches_processed")
         except Exception as exc:
+            self._metric("batch_failures")
             print(f"background batch failed: {type(exc).__name__}: {exc}")
 
     def shutdown(self) -> None:
@@ -1020,6 +1105,9 @@ class Bridge:
         for timer in self._summary_timers.values():
             timer.cancel()
         self._summary_timers.clear()
+        if self._remote_executor is not None:
+            self._remote_executor.shutdown(wait=False, cancel_futures=True)
+            self._remote_executor = None
         if self.memory_store is not None:
             self.memory_store.close()
 
@@ -1029,7 +1117,10 @@ class BridgeHandler(JsonHandler):
         if self.path != "/health":
             self.write_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not_found"})
             return
-        self.write_json(HTTPStatus.OK, {"ok": True, "service": "bridge"})
+        self.write_json(
+            HTTPStatus.OK,
+            {"ok": True, "service": "bridge", "metrics": self.server.bridge.metrics()},
+        )
 
     def do_POST(self) -> None:
         if self.path != "/onebot":
