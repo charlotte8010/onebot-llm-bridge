@@ -16,7 +16,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from .napcat import NapCatClient, NapCatError
-from .config import Settings
+from .config import Settings, parse_target_ids
 from .emoji_catalog import catalog_for_prompt, load_emoji_catalog, resolve_emoji
 from .formatting import parse_reply_actions, split_bubbles
 from .images import ImageResolver
@@ -897,13 +897,14 @@ class Bridge:
 
     def _active_message_tick(self, target_type: str) -> None:
         enabled, target_id, prompt = self._active_target_config(target_type)
-        if not enabled or not target_id or not prompt:
+        target_ids = parse_target_ids(target_id)
+        if not enabled or not target_ids or not prompt:
             return
         try:
             payload = {
                 "message": prompt,
                 "context": [],
-                "conversation": f"{target_type}:{target_id}",
+                "conversation": f"{target_type}:{','.join(target_ids)}",
                 "images": [],
                 "facts": [],
             }
@@ -914,10 +915,11 @@ class Bridge:
             for bubble in (str(item).strip() for item in bubbles):
                 if not bubble:
                     continue
-                if target_type == "group":
-                    self.napcat.send_group(target_id, bubble)
-                else:
-                    self.napcat.send_private(target_id, bubble)
+                for target in target_ids:
+                    if target_type == "group":
+                        self.napcat.send_group(target, bubble)
+                    else:
+                        self.napcat.send_private(target, bubble)
         except Exception as exc:
             print(f"active message failed: {type(exc).__name__}: {exc}")
         finally:

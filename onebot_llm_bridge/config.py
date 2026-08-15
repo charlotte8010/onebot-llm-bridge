@@ -11,6 +11,15 @@ class ConfigError(ValueError):
     """Raised when an environment value cannot be used safely."""
 
 
+def parse_target_ids(value: str) -> tuple[str, ...]:
+    """Parse comma-separated QQ or group ids, accepting the Chinese comma too."""
+    return tuple(
+        item.strip()
+        for item in value.replace("，", ",").split(",")
+        if item.strip()
+    )
+
+
 def parse_env_file(text: str) -> dict[str, str]:
     """Parse the small dotenv subset used by this project.
 
@@ -311,8 +320,11 @@ class Settings:
         ):
             if enabled and (not target_id or not prompt):
                 raise ConfigError(f"ACTIVE_{label.upper()}_TARGET_ID and ACTIVE_{label.upper()}_PROMPT are required when enabled")
-            if enabled and not target_id.isdigit():
-                raise ConfigError(f"ACTIVE_{label.upper()}_TARGET_ID must be a numeric QQ or group id")
+            target_ids = parse_target_ids(target_id)
+            if enabled and (not target_ids or any(not item.isdigit() for item in target_ids)):
+                raise ConfigError(
+                    f"ACTIVE_{label.upper()}_TARGET_ID must contain comma-separated numeric QQ or group ids"
+                )
         if bool(self.supabase_url) != bool(self.supabase_key):
             raise ConfigError("SUPABASE_URL and SUPABASE_SECRET_KEY must be set together")
         if self.supabase_url and not self.supabase_url.startswith("https://"):

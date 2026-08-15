@@ -126,6 +126,30 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(napcat.sent, [("private", "100", "主动消息"), ("group", "999", "主动消息")])
         self.assertEqual([call["conversation"] for call in calls], ["private:100", "group:999"])
 
+    def test_active_messages_can_send_to_multiple_private_targets(self):
+        settings = Settings.from_values(
+            {
+                "ACTIVE_INTERVAL_MINUTES": "1",
+                "ACTIVE_PRIVATE_ENABLED": "true",
+                "ACTIVE_PRIVATE_TARGET_ID": "100, 200",
+                "ACTIVE_PRIVATE_PROMPT": "私聊提示",
+            }
+        )
+        napcat = FakeNapCat()
+        calls = []
+        bridge = Bridge(
+            settings,
+            napcat=napcat,
+            bot_request=lambda payload: calls.append(payload) or {"bubbles": ["主动消息"]},
+        )
+        bridge._active_message_tick("private")
+        bridge.shutdown()
+        self.assertEqual(
+            napcat.sent,
+            [("private", "100", "主动消息"), ("private", "200", "主动消息")],
+        )
+        self.assertEqual([call["conversation"] for call in calls], ["private:100,200"])
+
     def test_unaddressed_group_is_ignored(self):
         napcat = FakeNapCat()
         bridge = Bridge(self.settings(), napcat=napcat, bot_request=lambda payload: {"bubbles": ["no"]})

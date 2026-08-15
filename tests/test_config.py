@@ -122,6 +122,16 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(settings.active_private_target_id, "100")
         self.assertEqual(settings.active_group_target_id, "999")
 
+    def test_active_target_ids_accept_multiple_comma_separated_values(self) -> None:
+        settings = Settings.from_values(
+            {
+                "ACTIVE_PRIVATE_ENABLED": "true",
+                "ACTIVE_PRIVATE_TARGET_ID": "100, 200，300",
+                "ACTIVE_PRIVATE_PROMPT": "私聊主动消息",
+            }
+        )
+        settings.validate_for_bridge()
+
     def test_active_messages_require_target_and_prompt(self) -> None:
         settings = Settings.from_values({"ACTIVE_ENABLED": "true"})
         with self.assertRaises(ConfigError):
