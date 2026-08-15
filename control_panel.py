@@ -16,6 +16,8 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from urllib.parse import urlsplit
 
+from onebot_llm_bridge.emoji_catalog import load_emoji_catalog
+
 
 ROOT = Path(__file__).resolve().parent
 ENV_FILE = ROOT / ".env.local"
@@ -677,6 +679,26 @@ class ControlPanel(tk.Tk):
         self.persona = self._entry(behavior, 11, "Persona 文件", "PERSONA_FILE", "")
         self.tool_allowlist = self._entry(behavior, 12, "工具白名单", "TOOL_ALLOWLIST", "get_time", column=2)
         self.emoji_catalog = self._entry(behavior, 13, "表情词典文件", "EMOJI_CATALOG", "", column=2)
+        ttk.Button(
+            behavior,
+            text="编辑词典",
+            command=self.edit_emoji_catalog,
+        ).grid(row=13, column=4, padx=(0, 4), pady=5, sticky="w")
+        ttk.Button(
+            behavior,
+            text="选择",
+            command=lambda: self._select_path(self.memory_db, "选择本地记忆库"),
+        ).grid(row=5, column=4, padx=(0, 4), pady=5, sticky="w")
+        ttk.Button(
+            behavior,
+            text="选择",
+            command=lambda: self._select_path(self.persona, "选择 Persona 文件"),
+        ).grid(row=11, column=4, padx=(0, 4), pady=5, sticky="w")
+        ttk.Button(
+            behavior,
+            text="编辑 Persona",
+            command=self.edit_persona,
+        ).grid(row=11, column=5, padx=(0, 4), pady=5, sticky="w")
 
         self.settings = network_content
         network = ttk.LabelFrame(self.settings, text="服务与 Token", padding=14, style="Section.TLabelframe")
@@ -1069,6 +1091,232 @@ class ControlPanel(tk.Tk):
         selected = filedialog.askopenfilename(parent=self, title=title)
         if selected:
             variable.set(selected)
+
+    def _project_path(self, raw: str) -> Path:
+        path = Path(raw.strip())
+        return path if path.is_absolute() else ROOT / path
+
+    def _emoji_catalog_seed(self) -> dict[str, dict[str, str]]:
+        configured = self.emoji_catalog.get().strip()
+        if configured:
+            return load_emoji_catalog(str(self._project_path(configured)))
+        example = ROOT / "examples" / "emoji_catalog.example.json"
+        return load_emoji_catalog(str(example))
+
+    def _emoji_item_dialog(
+        self,
+        parent: tk.Toplevel,
+        current: dict[str, str] | None = None,
+        current_name: str = "",
+    ) -> tuple[str, dict[str, str]] | None:
+        dialog = tk.Toplevel(parent)
+        dialog.title("编辑表情")
+        dialog.transient(parent)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+        frame = ttk.Frame(dialog, padding=16, style="Surface.TFrame")
+        frame.pack(fill="both", expand=True)
+        frame.columnconfigure(1, weight=1)
+        values = current or {"id": "", "meaning": "", "usage": ""}
+        name_var = tk.StringVar(value=current_name)
+        id_var = tk.StringVar(value=values.get("id", ""))
+        meaning_var = tk.StringVar(value=values.get("meaning", ""))
+        usage_var = tk.StringVar(value=values.get("usage", ""))
+        for row, label, variable in (
+            (0, "名称", name_var),
+            (1, "NapCat ID", id_var),
+            (2, "含义", meaning_var),
+            (3, "使用场景", usage_var),
+        ):
+            ttk.Label(frame, text=label, style="Form.TLabel").grid(row=row, column=0, sticky="w", padx=(0, 12), pady=5)
+            ttk.Entry(frame, textvariable=variable, width=42).grid(row=row, column=1, sticky="ew", pady=5)
+        result: list[tuple[str, dict[str, str]] | None] = [None]
+
+        def confirm() -> None:
+            name = name_var.get().strip()
+            emoji_id = id_var.get().strip()
+            if not name or not emoji_id.isdigit():
+                messagebox.showwarning("信息不完整", "名称不能为空，NapCat ID 必须是数字。", parent=dialog)
+                return
+            result[0] = (
+                name,
+                {
+                    "id": emoji_id,
+                    "meaning": meaning_var.get().strip(),
+                    "usage": usage_var.get().strip(),
+                },
+            )
+            dialog.destroy()
+
+        buttons = ttk.Frame(frame, style="Surface.TFrame")
+        buttons.grid(row=4, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        ttk.Button(buttons, text="取消", command=dialog.destroy).pack(side="right", padx=(8, 0))
+        ttk.Button(buttons, text="确定", command=confirm).pack(side="right")
+        dialog.bind("<Return>", lambda _event: confirm())
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        self._apply_theme_styles()
+        self.wait_window(dialog)
+        return result[0]
+
+    def edit_emoji_catalog(self) -> None:
+        """Edit semantic reactions without asking the user to hand-edit JSON."""
+        dialog = tk.Toplevel(self)
+        dialog.title("表情回应词典")
+        dialog.transient(self)
+        dialog.geometry("760x500")
+        dialog.minsize(620, 400)
+        dialog.grab_set()
+        outer = ttk.Frame(dialog, padding=16, style="Surface.TFrame")
+        outer.pack(fill="both", expand=True)
+        outer.rowconfigure(1, weight=1)
+        outer.columnconfigure(0, weight=1)
+        ttk.Label(
+            outer,
+            text="给每个表情起一个名字，模型会根据含义选择名字，程序再转换成 NapCat ID。",
+            style="Hint.TLabel",
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
+        columns = ("name", "id", "meaning", "usage")
+        tree = ttk.Treeview(outer, columns=columns, show="headings", selectmode="browse")
+        headings = {"name": "名称", "id": "NapCat ID", "meaning": "含义", "usage": "使用场景"}
+        widths = {"name": 110, "id": 100, "meaning": 220, "usage": 280}
+        for column in columns:
+            tree.heading(column, text=headings[column])
+            tree.column(column, width=widths[column], minwidth=70, anchor="w")
+        tree.grid(row=1, column=0, sticky="nsew")
+        scroll = ttk.Scrollbar(outer, orient="vertical", command=tree.yview)
+        scroll.grid(row=1, column=1, sticky="ns")
+        tree.configure(yscrollcommand=scroll.set)
+        catalog = self._emoji_catalog_seed()
+
+        def refresh() -> None:
+            tree.delete(*tree.get_children())
+            for name, item in catalog.items():
+                tree.insert("", "end", iid=name, values=(name, item["id"], item["meaning"], item["usage"]))
+
+        def edit_selected() -> None:
+            selected = tree.selection()
+            if not selected:
+                messagebox.showinfo("先选择表情", "请选择一行再编辑。", parent=dialog)
+                return
+            old_name = selected[0]
+            result = self._emoji_item_dialog(dialog, catalog[old_name], old_name)
+            if result is None:
+                return
+            new_name, item = result
+            if new_name != old_name and new_name in catalog:
+                messagebox.showwarning("名称重复", "这个表情名称已经存在。", parent=dialog)
+                return
+            if new_name != old_name:
+                del catalog[old_name]
+            catalog[new_name] = item
+            refresh()
+            tree.selection_set(new_name)
+
+        def add_item() -> None:
+            result = self._emoji_item_dialog(dialog)
+            if result is None:
+                return
+            name, item = result
+            if name in catalog:
+                messagebox.showwarning("名称重复", "这个表情名称已经存在。", parent=dialog)
+                return
+            catalog[name] = item
+            refresh()
+            tree.selection_set(name)
+
+        def remove_item() -> None:
+            selected = tree.selection()
+            if not selected:
+                return
+            name = selected[0]
+            if messagebox.askyesno("删除表情", f"确定删除“{name}”吗？", parent=dialog):
+                catalog.pop(name, None)
+                refresh()
+
+        def save_catalog() -> None:
+            raw_path = self.emoji_catalog.get().strip() or ".local/emoji_catalog.json"
+            path = self._project_path(raw_path)
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            except OSError as exc:
+                messagebox.showerror("保存失败", str(exc), parent=dialog)
+                return
+            self.emoji_catalog.set(raw_path)
+            if self.save_config():
+                self._append_log(f"表情词典已保存到 {path}")
+                dialog.destroy()
+
+        actions = ttk.Frame(outer, style="Surface.TFrame")
+        actions.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        ttk.Button(actions, text="新增", command=add_item).pack(side="left")
+        ttk.Button(actions, text="编辑", command=edit_selected).pack(side="left", padx=(8, 0))
+        ttk.Button(actions, text="删除", command=remove_item).pack(side="left", padx=(8, 0))
+        ttk.Button(actions, text="取消", command=dialog.destroy).pack(side="right")
+        ttk.Button(actions, text="保存词典", command=save_catalog).pack(side="right", padx=(0, 8))
+        refresh()
+        self._apply_theme_styles()
+        self.wait_window(dialog)
+
+    def edit_persona(self) -> None:
+        """Edit the persona prompt in a bounded text editor inside the console."""
+        raw_path = self.persona.get().strip() or ".local/persona_prompt.txt"
+        path = self._project_path(raw_path)
+        try:
+            content = path.read_text(encoding="utf-8") if path.is_file() else ""
+        except (OSError, UnicodeError) as exc:
+            messagebox.showerror("读取 Persona 失败", str(exc), parent=self)
+            return
+        dialog = tk.Toplevel(self)
+        dialog.title("编辑 Persona")
+        dialog.transient(self)
+        dialog.geometry("760x560")
+        dialog.minsize(560, 400)
+        dialog.grab_set()
+        outer = ttk.Frame(dialog, padding=16, style="Surface.TFrame")
+        outer.pack(fill="both", expand=True)
+        outer.rowconfigure(1, weight=1)
+        outer.columnconfigure(0, weight=1)
+        ttk.Label(
+            outer,
+            text="这里填写稳定的人设、说话方式和边界。事实性兴趣请写进记忆，不要让模型自行补全。",
+            style="Hint.TLabel",
+        ).grid(row=0, column=0, sticky="w", pady=(0, 10))
+        text = tk.Text(
+            outer,
+            wrap="word",
+            undo=True,
+            font=("Microsoft YaHei UI", 10),
+            background=self.COLORS["log"],
+            foreground=self.COLORS["text"],
+            insertbackground=self.COLORS["accent"],
+            selectbackground=self.COLORS["accent_soft"],
+            relief="flat",
+            borderwidth=0,
+            padx=10,
+            pady=10,
+        )
+        text.grid(row=1, column=0, sticky="nsew")
+        text.insert("1.0", content)
+
+        def save_persona() -> None:
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text.get("1.0", "end-1c"), encoding="utf-8")
+            except OSError as exc:
+                messagebox.showerror("保存失败", str(exc), parent=dialog)
+                return
+            self.persona.set(raw_path)
+            if self.save_config():
+                self._append_log(f"Persona 已保存到 {path}")
+                dialog.destroy()
+
+        actions = ttk.Frame(outer, style="Surface.TFrame")
+        actions.grid(row=2, column=0, sticky="ew", pady=(12, 0))
+        ttk.Button(actions, text="取消", command=dialog.destroy).pack(side="right")
+        ttk.Button(actions, text="保存 Persona", command=save_persona).pack(side="right", padx=(0, 8))
+        self._apply_theme_styles()
+        self.wait_window(dialog)
 
     def start_napcat(self) -> None:
         api_url = self.napcat_url.get().strip() or DEFAULT_NAPCAT_API_URL
