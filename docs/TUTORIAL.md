@@ -155,7 +155,18 @@ BOT_SERVICE_TOKEN=Bridge和Bot_service之间的Token
 
 # random 表示从 3、4、5、6 秒中随机等待，也可以写成固定数字
 DEBOUNCE_SECONDS=random
+FOLLOWUP_SECONDS=120
+TYPING_STATUS=true
 ```
+
+群聊需要识别机器人时，再填写机器人的 QQ 号和称呼：
+
+```dotenv
+BOT_QQ=你的机器人QQ号
+BOT_NAMES=bot,助手,你的机器人昵称
+```
+
+`FOLLOWUP_SECONDS` 只影响 `GROUP_MODE=smart`：机器人回复后，在这个时间内可以继续当前话题而不必再次 @。`TYPING_STATUS=false` 会关闭私聊中的“正在输入”状态。
 
 生成随机 Token 可以使用：
 

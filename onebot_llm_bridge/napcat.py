@@ -49,15 +49,41 @@ class NapCatClient:
             raise NapCatError(f"NapCat action {action} was rejected")
         return data
 
-    def send_private(self, user_id: str, message: str) -> dict[str, Any]:
-        return self.call("send_private_msg", {"user_id": user_id, "message": message})
+    @staticmethod
+    def _message_payload(message: str, reply_to: str | None = None) -> str | list[dict[str, Any]]:
+        if not reply_to:
+            return message
+        return [
+            {"type": "reply", "data": {"id": reply_to}},
+            {"type": "text", "data": {"text": message}},
+        ]
 
-    def send_group(self, group_id: str, message: str) -> dict[str, Any]:
-        return self.call("send_group_msg", {"group_id": group_id, "message": message})
+    def send_private(
+        self,
+        user_id: str,
+        message: str,
+        *,
+        reply_to: str | None = None,
+    ) -> dict[str, Any]:
+        return self.call(
+            "send_private_msg",
+            {"user_id": user_id, "message": self._message_payload(message, reply_to)},
+        )
+
+    def send_group(
+        self,
+        group_id: str,
+        message: str,
+        *,
+        reply_to: str | None = None,
+    ) -> dict[str, Any]:
+        return self.call(
+            "send_group_msg",
+            {"group_id": group_id, "message": self._message_payload(message, reply_to)},
+        )
 
     def set_input_status(self, user_id: str, active: bool) -> dict[str, Any]:
         return self.call(
             "set_input_status",
             {"user_id": user_id, "event_type": 1 if active else 0},
         )
-

@@ -9,13 +9,18 @@ from onebot_llm_bridge.services import Bridge
 class FakeNapCat:
     def __init__(self):
         self.sent = []
+        self.quoted = []
 
-    def send_private(self, user_id, message):
+    def send_private(self, user_id, message, *, reply_to=None):
         self.sent.append(("private", user_id, message))
+        if reply_to:
+            self.quoted.append(("private", user_id, reply_to))
         return {"status": "ok"}
 
-    def send_group(self, group_id, message):
+    def send_group(self, group_id, message, *, reply_to=None):
         self.sent.append(("group", group_id, message))
+        if reply_to:
+            self.quoted.append(("group", group_id, reply_to))
         return {"status": "ok"}
 
 
@@ -100,3 +105,46 @@ class BridgeTests(unittest.TestCase):
         bridge.shutdown()
         self.assertEqual(calls[0]["message"], "第一句\n第二句")
         self.assertEqual(napcat.sent, [("private", "123", "合并回复")])
+
+    def test_group_smart_mode_continues_after_a_reply(self):
+        settings = Settings.from_values(
+            {
+                "LLM_API_KEY": "key",
+                "LLM_BASE_URL": "https://example.test/v1",
+                "LLM_MODEL": "chat",
+                "GROUP_MODE": "smart",
+                "GROUP_ALLOWLIST": "999",
+                "FOLLOWUP_SECONDS": "30",
+            }
+        )
+        napcat = FakeNapCat()
+        bridge = Bridge(settings, napcat=napcat, bot_request=lambda payload: {"bubbles": ["好"]})
+        first = {
+            "post_type": "message",
+            "message_type": "group",
+            "group_id": 999,
+            "user_id": 123,
+            "message_id": 10,
+            "message": "[@bot] 开始聊",
+            "to_me": True,
+        }
+        second = {**first, "message_id": 11, "message": "然后呢", "to_me": False}
+        self.assertTrue(bridge.handle_event(first)["handled"])
+        self.assertTrue(bridge.handle_event(second)["handled"])
+
+    def test_group_reply_event_is_sent_with_quote(self):
+        settings = self.settings()
+        napcat = FakeNapCat()
+        bridge = Bridge(settings, napcat=napcat, bot_request=lambda payload: {"bubbles": ["回答"]})
+        event = {
+            "post_type": "message",
+            "message_type": "group",
+            "group_id": 999,
+            "user_id": 123,
+            "message_id": 22,
+            "message": "问题",
+            "to_me": True,
+            "reply": {"id": 21},
+        }
+        self.assertTrue(bridge.handle_event(event)["handled"])
+        self.assertEqual(napcat.quoted, [("group", "999", "21")])

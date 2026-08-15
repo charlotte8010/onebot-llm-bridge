@@ -33,6 +33,15 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(settings.debounce_delay(), 5.0)
         choice.assert_called_once_with((3.0, 4.0, 5.0, 6.0))
 
+    def test_bot_identity_and_followup_settings_are_loaded(self) -> None:
+        settings = Settings.from_values(
+            {"BOT_QQ": "123", "BOT_NAMES": "御茗, ymm", "FOLLOWUP_SECONDS": "30", "TYPING_STATUS": "off"}
+        )
+        self.assertEqual(settings.bot_qq, "123")
+        self.assertEqual(settings.bot_names, ("御茗", "ymm"))
+        self.assertEqual(settings.followup_seconds, 30.0)
+        self.assertFalse(settings.typing_status)
+
     def test_invalid_group_allowlist_is_rejected(self) -> None:
         with self.assertRaises(ConfigError):
             Settings.from_values({"GROUP_ALLOWLIST": "friends"})

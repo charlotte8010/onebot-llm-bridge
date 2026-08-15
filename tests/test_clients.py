@@ -48,3 +48,15 @@ class ClientTests(unittest.TestCase):
         client.send_private("123", "hello")
         self.assertEqual(requests[0].get_header("Authorization"), "Bearer server-token")
         self.assertTrue(requests[0].full_url.endswith("/send_private_msg"))
+
+    def test_napcat_client_builds_quote_message_segments(self) -> None:
+        requests = []
+
+        def opener(request, timeout):
+            requests.append(request)
+            return FakeResponse({"status": "ok", "retcode": 0, "data": {}})
+
+        client = NapCatClient("http://127.0.0.1:3000", opener=opener)
+        client.send_group("456", "reply", reply_to="789")
+        payload = json.loads(requests[0].data.decode("utf-8"))
+        self.assertEqual(payload["message"][0], {"type": "reply", "data": {"id": "789"}})

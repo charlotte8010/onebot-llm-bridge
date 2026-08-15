@@ -96,10 +96,14 @@ class Settings:
     bot_service_host: str = "127.0.0.1"
     bot_service_port: int = 8765
     bot_service_token: str = ""
+    bot_qq: str = ""
+    bot_names: tuple[str, ...] = ()
     group_mode: str = "mention"
     group_allowlist: frozenset[str] = frozenset()
     debounce_seconds: float = 3.0
     debounce_random: bool = False
+    followup_seconds: float = 120.0
+    typing_status: bool = True
     context_messages: int = 20
     persona_file: str = ""
 
@@ -114,6 +118,12 @@ class Settings:
         for group_id in allowlist:
             if not group_id.isdigit():
                 raise ConfigError("GROUP_ALLOWLIST must contain comma-separated QQ numbers")
+        bot_qq = _text(values, "BOT_QQ")
+        if bot_qq and not bot_qq.isdigit():
+            raise ConfigError("BOT_QQ must be a QQ number")
+        bot_names = tuple(
+            item.strip() for item in _text(values, "BOT_NAMES").split(",") if item.strip()
+        )
         debounce_value = _text(values, "DEBOUNCE_SECONDS", "3")
         debounce_random = debounce_value.lower() == "random"
         debounce_seconds = (
@@ -135,10 +145,15 @@ class Settings:
             bot_service_host=_text(values, "BOT_SERVICE_HOST", "127.0.0.1"),
             bot_service_port=_int(values, "BOT_SERVICE_PORT", 8765, 1, 65535),
             bot_service_token=_text(values, "BOT_SERVICE_TOKEN"),
+            bot_qq=bot_qq,
+            bot_names=bot_names,
             group_mode=group_mode,
             group_allowlist=allowlist,
             debounce_seconds=debounce_seconds,
             debounce_random=debounce_random,
+            followup_seconds=_float(values, "FOLLOWUP_SECONDS", 120.0, 0.0, 3600.0),
+            typing_status=_text(values, "TYPING_STATUS", "true").lower()
+            in {"1", "true", "yes", "on"},
             context_messages=_int(values, "CONTEXT_MESSAGES", 20, 0, 100),
             persona_file=_text(values, "PERSONA_FILE"),
         )

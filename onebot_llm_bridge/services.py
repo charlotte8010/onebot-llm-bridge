@@ -3,6 +3,7 @@ from __future__ import annotations
 import hmac
 import json
 import threading
+import time
 from collections import defaultdict, deque
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -23,9 +24,17 @@ MAX_BODY_BYTES = 1_048_576
 
 
 class PendingBatch:
-    def __init__(self, messages: list[NormalizedMessage], context: list[NormalizedMessage]) -> None:
+    def __init__(
+        self,
+        messages: list[NormalizedMessage],
+        context: list[NormalizedMessage],
+        mode: str,
+        reply_to: str | None,
+    ) -> None:
         self.messages = messages
         self.context = context
+        self.mode = mode
+        self.reply_to = reply_to
         self.timer: threading.Timer | None = None
 
 
@@ -190,19 +199,36 @@ class Bridge:
         self._locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
         self._state_lock = threading.RLock()
         self._pending: dict[str, PendingBatch] = {}
+        self._topic_until: dict[str, float] = {}
 
     def _decision(self, message: NormalizedMessage):
+        active_topic = False
+        if message.conversation_type == "group" and self.settings.group_mode == "smart":
+            with self._state_lock:
+                active_topic = self._topic_until.get(message.conversation_key, 0.0) > time.time()
         return decide_reply(
             message,
             group_mode=self.settings.group_mode,
             group_allowlist=self.settings.group_allowlist,
-            address_names=("bot",),
+            address_names=self.settings.bot_names,
+            bot_qq=self.settings.bot_qq,
+            active_topic=active_topic,
         )
+
+    def _set_typing(self, user_id: str, active: bool) -> None:
+        if not self.settings.typing_status or not hasattr(self.napcat, "set_input_status"):
+            return
+        try:
+            self.napcat.set_input_status(user_id, active)
+        except NapCatError as exc:
+            print(f"NapCat input status failed: {type(exc).__name__}")
 
     def _process_batch(
         self,
         messages: list[NormalizedMessage],
         context: list[NormalizedMessage],
+        mode: str = "reply",
+        reply_to: str | None = None,
     ) -> dict[str, Any]:
         first = messages[0]
         with self._locks[first.conversation_key]:
@@ -212,7 +238,11 @@ class Bridge:
                 "conversation": first.conversation_key,
                 "images": [],
             }
-            result = self.bot_request(payload)
+            self._set_typing(first.sender_id, True)
+            try:
+                result = self.bot_request(payload)
+            finally:
+                self._set_typing(first.sender_id, False)
             raw_bubbles = result.get("bubbles")
             bubbles = (
                 [str(item).strip() for item in raw_bubbles if str(item).strip()]
@@ -223,9 +253,18 @@ class Bridge:
                 return {"handled": False, "reason": "empty_reply"}
             for bubble in bubbles:
                 if first.conversation_type == "private":
-                    self.napcat.send_private(first.conversation_id, bubble)
+                    if mode == "quote_reply":
+                        self.napcat.send_private(first.conversation_id, bubble, reply_to=reply_to)
+                    else:
+                        self.napcat.send_private(first.conversation_id, bubble)
                 else:
-                    self.napcat.send_group(first.conversation_id, bubble)
+                    if mode == "quote_reply":
+                        self.napcat.send_group(first.conversation_id, bubble, reply_to=reply_to)
+                    else:
+                        self.napcat.send_group(first.conversation_id, bubble)
+            if first.conversation_type == "group" and self.settings.group_mode == "smart":
+                with self._state_lock:
+                    self._topic_until[first.conversation_key] = time.time() + self.settings.followup_seconds
             return {"handled": True, "reason": "reply", "bubbles": len(bubbles)}
 
     def handle_event(self, event: Mapping[str, Any]) -> dict[str, Any]:
@@ -236,7 +275,12 @@ class Bridge:
         with self._state_lock:
             context = list(self._contexts[message.conversation_key])
             self._contexts[message.conversation_key].append(message)
-        result = self._process_batch([message], context)
+        result = self._process_batch(
+            [message],
+            context,
+            decision.mode,
+            message.reply_to if decision.mode == "quote_reply" else None,
+        )
         result["reason"] = decision.reason
         return result
 
@@ -252,7 +296,12 @@ class Bridge:
             self._contexts[key].append(message)
             batch = self._pending.get(key)
             if batch is None:
-                batch = PendingBatch([message], context)
+                batch = PendingBatch(
+                    [message],
+                    context,
+                    decision.mode,
+                    message.reply_to if decision.mode == "quote_reply" else None,
+                )
                 self._pending[key] = batch
                 self._schedule_batch(key, self.settings.debounce_delay())
             else:
@@ -277,7 +326,7 @@ class Bridge:
         if batch is None:
             return
         try:
-            self._process_batch(batch.messages, batch.context)
+            self._process_batch(batch.messages, batch.context, batch.mode, batch.reply_to)
         except Exception as exc:
             print(f"background batch failed: {type(exc).__name__}: {exc}")
 

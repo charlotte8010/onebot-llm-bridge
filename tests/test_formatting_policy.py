@@ -39,3 +39,22 @@ class FormattingAndPolicyTests(unittest.TestCase):
             decide_reply(group, group_mode="mention", group_allowlist=frozenset({"999"})).should_reply
         )
 
+    def test_at_bot_and_smart_followup_can_address_a_group(self) -> None:
+        addressed = message(kind="group", group_id="999", text="[@123] 你好")
+        addressed = NormalizedMessage(
+            **{**addressed.__dict__, "segments": ({"type": "at", "data": {"qq": "123"}},)}
+        )
+        decision = decide_reply(
+            addressed,
+            group_mode="mention",
+            group_allowlist=frozenset({"999"}),
+            bot_qq="123",
+        )
+        self.assertTrue(decision.should_reply)
+        continuation = decide_reply(
+            message(kind="group", group_id="999"),
+            group_mode="smart",
+            group_allowlist=frozenset({"999"}),
+            active_topic=True,
+        )
+        self.assertEqual(continuation.reason, "active_topic")

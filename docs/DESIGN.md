@@ -278,6 +278,8 @@ MEMORY_DB=./.local/memory.sqlite3
 
 `DEBOUNCE_SECONDS=random` 时从 3、4、5、6 秒中随机选择；填写数字时使用固定秒数。私聊新消息会重新选择并重置窗口，群聊只使用首条消息创建的窗口。
 
+`BOT_QQ` 和 `BOT_NAMES` 用于识别 @ 和称呼；`FOLLOWUP_SECONDS` 控制 `smart` 群聊在机器人回复后的续聊窗口；`TYPING_STATUS=false` 可关闭私聊输入状态。
+
 ## 10. 安全设计
 
 - 默认只监听 `127.0.0.1`。
