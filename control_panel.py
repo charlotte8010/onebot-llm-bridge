@@ -959,13 +959,13 @@ class ControlPanel(tk.Tk):
         behavior.columnconfigure(3, weight=1)
         self.group_mode = self._combo(behavior, 0, 0, "群聊模式", "GROUP_MODE", ("mention", "smart", "all", "off"), "mention")
         self.decision_mode = self._combo(behavior, 0, 2, "智能判断", "DECISION_MODE", ("heuristic", "model"), "heuristic")
-        self.group_allowlist = self._entry(behavior, 1, "群聊白名单", "GROUP_ALLOWLIST")
+        self.group_allowlist = self._entry(behavior, 1, "群聊白名单", "GROUP_ALLOWLIST", input_columnspan=5)
         self.bot_qq = self._entry(behavior, 2, "Bot QQ", "BOT_QQ")
-        self.bot_names = self._entry(behavior, 3, "Bot 名称", "BOT_NAMES")
+        self.bot_names = self._entry(behavior, 3, "Bot 名称", "BOT_NAMES", input_columnspan=5)
         self.debounce = self._combo(behavior, 4, 0, "防抖延迟", "DEBOUNCE_SECONDS", ("random", "3", "4", "5", "6"), "random")
         self.followup = self._entry(behavior, 4, "继续话题秒数", "FOLLOWUP_SECONDS", "120", column=2)
         self.context_messages = self._entry(behavior, 5, "上下文条数", "CONTEXT_MESSAGES", "20")
-        self.memory_db = self._entry(behavior, 5, "持久化记忆库", "MEMORY_DB", "", column=2)
+        self.memory_db = self._entry(behavior, 5, "持久化记忆库", "MEMORY_DB", "", column=2, input_columnspan=2)
         self.reaction_mode = self._combo(behavior, 6, 2, "表情回应", "REACTION_MODE", ("off", "like"), "off")
         self.typing = tk.BooleanVar(value=self._value("TYPING_STATUS", "true").lower() in {"1", "true", "yes", "on"})
         self._checkbutton(behavior, 6, 0, "显示输入状态", self.typing)
@@ -975,20 +975,20 @@ class ControlPanel(tk.Tk):
         self._tool_selector(behavior, 7, 2)
         self.active_interval = self._entry(behavior, 8, "主动消息间隔(分钟)", "ACTIVE_INTERVAL_MINUTES", "60")
         self.active_target_type = self._combo(behavior, 8, 2, "主动消息类型", "ACTIVE_TARGET_TYPE", ("private", "group"), "private")
-        self.active_target_id = self._entry(behavior, 9, "主动消息目标", "ACTIVE_TARGET_ID", "")
-        self.active_prompt = self._entry(behavior, 10, "主动消息提示", "ACTIVE_PROMPT", "")
-        self.persona = self._entry(behavior, 11, "Persona 文件", "PERSONA_FILE", "")
-        self.emoji_catalog = self._entry(behavior, 13, "表情词典文件", "EMOJI_CATALOG", "")
+        self.active_target_id = self._entry(behavior, 9, "主动消息目标", "ACTIVE_TARGET_ID", "", input_columnspan=5)
+        self.active_prompt = self._entry(behavior, 10, "主动消息提示", "ACTIVE_PROMPT", "", input_columnspan=5)
+        self.persona = self._entry(behavior, 11, "Persona 文件", "PERSONA_FILE", "", input_columnspan=3)
+        self.emoji_catalog = self._entry(behavior, 13, "表情词典文件", "EMOJI_CATALOG", "", input_columnspan=3)
         ttk.Button(
             behavior,
             text="编辑词典",
             command=self.edit_emoji_catalog,
-        ).grid(row=13, column=2, padx=(8, 4), pady=5, sticky="w")
+        ).grid(row=13, column=4, padx=(8, 4), pady=5, sticky="w")
         ttk.Button(
             behavior,
             text="选择",
             command=lambda: self._select_path(self.memory_db, "选择本地记忆库"),
-        ).grid(row=5, column=4, padx=(0, 4), pady=5, sticky="w")
+        ).grid(row=5, column=5, padx=(0, 4), pady=5, sticky="w")
         ttk.Button(
             behavior,
             text="选择",
@@ -1219,10 +1219,27 @@ class ControlPanel(tk.Tk):
         selected.extend(sorted(self._unknown_tools))
         self.tool_allowlist.set(",".join(selected))
 
-    def _entry(self, parent: ttk.Frame, row: int, label: str, key: str, default: str = "", secret: bool = False, column: int = 0) -> tk.StringVar:
+    def _entry(
+        self,
+        parent: ttk.Frame,
+        row: int,
+        label: str,
+        key: str,
+        default: str = "",
+        secret: bool = False,
+        column: int = 0,
+        input_columnspan: int = 1,
+    ) -> tk.StringVar:
         self._label(parent, row, column, label, key)
         variable = tk.StringVar(value=self._value(key, default))
-        ttk.Entry(parent, textvariable=variable, show="*" if secret else "").grid(row=row, column=column + 1, sticky="ew", padx=(0, 18) if column == 0 else (0, 0), pady=5)
+        ttk.Entry(parent, textvariable=variable, show="*" if secret else "").grid(
+            row=row,
+            column=column + 1,
+            columnspan=input_columnspan,
+            sticky="ew",
+            padx=(0, 18) if column == 0 else (0, 0),
+            pady=5,
+        )
         return variable
 
     def _model_entry(self, parent: ttk.Frame, row: int, label: str, key: str, detect: Callable[[], None]) -> tk.StringVar:
