@@ -793,6 +793,18 @@ class ControlPanel(tk.Tk):
             "Panel.Vertical.TScrollbar",
             background=[("active", colors["accent"]), ("pressed", colors["accent"])],
         )
+        style.layout(
+            "Panel.Vertical.TScrollbar",
+            [
+                (
+                    "Vertical.Scrollbar.trough",
+                    {
+                        "sticky": "ns",
+                        "children": [("Vertical.Scrollbar.thumb", {"sticky": "nswe"})],
+                    },
+                )
+            ],
+        )
         if hasattr(self, "log"):
             self.log.configure(background=colors["log"], foreground=colors["text"], insertbackground=colors["accent"], selectbackground=colors["accent_soft"])
         for canvas in getattr(self, "_tab_canvases", []):
@@ -901,6 +913,18 @@ class ControlPanel(tk.Tk):
         style.map(
             "Panel.Vertical.TScrollbar",
             background=[("active", colors["accent"]), ("pressed", colors["accent"])],
+        )
+        style.layout(
+            "Panel.Vertical.TScrollbar",
+            [
+                (
+                    "Vertical.Scrollbar.trough",
+                    {
+                        "sticky": "ns",
+                        "children": [("Vertical.Scrollbar.thumb", {"sticky": "nswe"})],
+                    },
+                )
+            ],
         )
         outer = ttk.Frame(self, padding=(24, 20, 24, 18), style="App.TFrame")
         outer.pack(fill="both", expand=True)
