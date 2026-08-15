@@ -112,6 +112,7 @@ class Settings:
     typing_status: bool = True
     context_messages: int = 20
     persona_file: str = ""
+    memory_db: str = ""
 
     @classmethod
     def from_values(cls, values: Mapping[str, str]) -> "Settings":
@@ -175,6 +176,7 @@ class Settings:
             in {"1", "true", "yes", "on"},
             context_messages=_int(values, "CONTEXT_MESSAGES", 20, 0, 100),
             persona_file=_text(values, "PERSONA_FILE"),
+            memory_db=_text(values, "MEMORY_DB"),
         )
 
     def validate_for_bot(self) -> None:

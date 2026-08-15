@@ -412,3 +412,17 @@ python .\check_models.py
 Some relay services do not implement `/models`; in that case the diagnostic
 reports the limitation, and you can still keep using the explicitly configured
 model name.
+
+## Optional persistent context
+
+By default the bridge forgets its context when it restarts. To keep the recent
+conversation window, add:
+
+```dotenv
+CONTEXT_MESSAGES=20
+MEMORY_DB=./.local/context.sqlite3
+```
+
+This is intentionally opt-in. The store keeps normalized message fields only,
+not complete raw OneBot events, tokens, or cookies. Remove `MEMORY_DB` when
+you want memory to stay process-local.

@@ -16,6 +16,7 @@ from .napcat import NapCatClient, NapCatError
 from .config import Settings
 from .formatting import split_bubbles
 from .images import ImageResolver
+from .memory import SQLiteMemoryStore
 from .models import EventError, NormalizedMessage, is_meaningful, json_context
 from .policy import decide_reply
 from .providers import OpenAICompatibleProvider, ProviderError
@@ -225,6 +226,7 @@ class Bridge:
         napcat: NapCatClient | None = None,
         bot_request: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
         image_resolver: ImageResolver | None = None,
+        memory_store: SQLiteMemoryStore | None = None,
     ) -> None:
         settings.validate_for_bridge()
         self.settings = settings
@@ -233,6 +235,12 @@ class Bridge:
             settings.napcat_access_token,
         )
         self.image_resolver = image_resolver or ImageResolver(self.napcat)
+        self.memory_store = memory_store
+        if self.memory_store is None and settings.memory_db and settings.context_messages > 0:
+            self.memory_store = SQLiteMemoryStore(
+                settings.memory_db,
+                max_messages=max(settings.context_messages * 5, settings.context_messages),
+            )
         self.bot_request = bot_request or (
             lambda payload: _post_json(
                 f"http://{settings.bot_service_host}:{settings.bot_service_port}/reply",
@@ -248,6 +256,23 @@ class Bridge:
         self._state_lock = threading.RLock()
         self._pending: dict[str, PendingBatch] = {}
         self._topic_until: dict[str, float] = {}
+        self._loaded_contexts: set[str] = set()
+
+    def _context_for(self, key: str) -> deque[NormalizedMessage]:
+        context = self._contexts[key]
+        if key not in self._loaded_contexts:
+            if self.memory_store is not None:
+                context.extend(self.memory_store.load(key, self.settings.context_messages))
+            self._loaded_contexts.add(key)
+        return context
+
+    def _record_message(self, message: NormalizedMessage) -> list[NormalizedMessage]:
+        context = self._context_for(message.conversation_key)
+        previous = list(context)
+        context.append(message)
+        if self.memory_store is not None:
+            self.memory_store.append(message)
+        return previous
 
     def _decision(self, message: NormalizedMessage):
         active_topic = False
@@ -325,8 +350,7 @@ class Bridge:
         if not is_meaningful(message) or not decision.should_reply:
             return {"handled": False, "reason": decision.reason}
         with self._state_lock:
-            context = list(self._contexts[message.conversation_key])
-            self._contexts[message.conversation_key].append(message)
+            context = self._record_message(message)
         result = self._process_batch(
             [message],
             context,
@@ -344,8 +368,7 @@ class Bridge:
             return {"accepted": False, "reason": decision.reason}
         key = message.conversation_key
         with self._state_lock:
-            context = list(self._contexts[key])
-            self._contexts[key].append(message)
+            context = self._record_message(message)
             batch = self._pending.get(key)
             if batch is None:
                 batch = PendingBatch(
@@ -389,6 +412,8 @@ class Bridge:
         for batch in batches:
             if batch.timer is not None:
                 batch.timer.cancel()
+        if self.memory_store is not None:
+            self.memory_store.close()
 
 
 class BridgeHandler(JsonHandler):

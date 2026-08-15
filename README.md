@@ -30,6 +30,18 @@ image. If an image cannot be downloaded or decoded, the bridge logs a short
 failure and continues with the text part of the message. It never sends the
 NapCat access token to the model provider.
 
+Persistent context is opt-in. To keep recent normalized messages across a
+bridge restart, set:
+
+```dotenv
+CONTEXT_MESSAGES=20
+MEMORY_DB=./.local/context.sqlite3
+```
+
+The database contains only recent normalized chat fields needed for context;
+the raw OneBot event and access tokens are not stored. Leave `MEMORY_DB` empty
+to keep the current in-memory-only behavior.
+
 To check whether a new provider URL and key expose an OpenAI-compatible model
 list, run:
 

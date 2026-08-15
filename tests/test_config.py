@@ -83,3 +83,7 @@ class ConfigTests(unittest.TestCase):
         settings.validate_for_bot()
         self.assertEqual(settings.vision_api_key, "shared-key")
         self.assertEqual(settings.vision_base_url, "https://shared.example/v1")
+
+    def test_memory_database_is_optional(self) -> None:
+        settings = Settings.from_values({"MEMORY_DB": "./.local/context.sqlite3"})
+        self.assertEqual(settings.memory_db, "./.local/context.sqlite3")
