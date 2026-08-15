@@ -1,6 +1,6 @@
 import unittest
 
-from onebot_llm_bridge.formatting import split_bubbles
+from onebot_llm_bridge.formatting import parse_reply_actions, split_bubbles
 from onebot_llm_bridge.models import NormalizedMessage
 from onebot_llm_bridge.policy import decide_reply
 
@@ -25,6 +25,12 @@ class FormattingAndPolicyTests(unittest.TestCase):
 
     def test_split_bubbles_falls_back_to_lines_and_limits_count(self) -> None:
         self.assertEqual(split_bubbles("a\nb\nc", max_bubbles=2), ["a", "b"])
+
+    def test_reply_actions_extracts_optional_reaction(self) -> None:
+        self.assertEqual(
+            parse_reply_actions("[[REACTION:128077]][[BUBBLE]]好耶"),
+            (["好耶"], "128077"),
+        )
 
     def test_private_messages_reply(self) -> None:
         decision = decide_reply(message(), group_mode="mention", group_allowlist=frozenset())

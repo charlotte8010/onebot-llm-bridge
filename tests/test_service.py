@@ -86,3 +86,27 @@ class BotServiceVisionTests(unittest.TestCase):
         result = service.reply(self.payload())
         self.assertEqual(result["bubbles"], ["文字降级回复"])
         self.assertEqual([call[1] for call in chat.calls], [["data:image/png;base64,abc"], []])
+
+    def test_allowlisted_tool_is_resolved_before_final_reply(self):
+        chat = FakeProvider("[[TOOL:get_time]]")
+        chat.reply_text = "[[TOOL:get_time]]"  # first response remains the tool request
+
+        responses = iter(["[[TOOL:get_time]]", "工具结果已收到"])
+
+        def complete(messages, images=None):
+            chat.calls.append((messages, images or []))
+            return next(responses)
+
+        chat.complete = complete
+        settings = Settings.from_values(
+            {
+                "LLM_API_KEY": "chat-key",
+                "LLM_BASE_URL": "https://chat.example/v1",
+                "LLM_MODEL": "chat-model",
+                "TOOLS_ENABLED": "true",
+                "TOOL_ALLOWLIST": "get_time",
+            }
+        )
+        result = BotService(settings, provider=chat).reply({"message": "现在几点", "context": []})
+        self.assertEqual(result["bubbles"], ["工具结果已收到"])
+        self.assertEqual(len(chat.calls), 2)

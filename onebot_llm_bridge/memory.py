@@ -35,6 +35,20 @@ class SQLiteMemoryStore:
         self._connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_key, id)"
         )
+        self._connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS facts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scope_key TEXT NOT NULL,
+                fact TEXT NOT NULL,
+                source_message_id TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
+        self._connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_facts_scope ON facts(scope_key, id)"
+        )
         self._connection.commit()
 
     def append(self, message: NormalizedMessage) -> None:
@@ -105,3 +119,36 @@ class SQLiteMemoryStore:
     def close(self) -> None:
         with self._lock:
             self._connection.close()
+
+    def add_fact(self, scope_key: str, fact: str, source_message_id: str = "") -> None:
+        value = fact.strip()
+        if not value:
+            return
+        with self._lock:
+            self._connection.execute(
+                "DELETE FROM facts WHERE scope_key = ? AND fact = ?",
+                (scope_key, value),
+            )
+            self._connection.execute(
+                "INSERT INTO facts(scope_key, fact, source_message_id, created_at) VALUES (?, ?, ?, strftime('%s', 'now'))",
+                (scope_key, value, source_message_id),
+            )
+            self._connection.commit()
+
+    def load_facts(self, scope_key: str, limit: int = 40) -> list[str]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT fact FROM facts WHERE scope_key = ? ORDER BY id DESC LIMIT ?",
+                (scope_key, max(0, limit)),
+            ).fetchall()
+        return [str(row[0]) for row in reversed(rows)]
+
+    def remove_fact(self, scope_key: str, fact: str) -> bool:
+        value = fact.strip()
+        with self._lock:
+            cursor = self._connection.execute(
+                "DELETE FROM facts WHERE scope_key = ? AND fact = ?",
+                (scope_key, value),
+            )
+            self._connection.commit()
+        return cursor.rowcount > 0

@@ -87,3 +87,39 @@ class ConfigTests(unittest.TestCase):
     def test_memory_database_is_optional(self) -> None:
         settings = Settings.from_values({"MEMORY_DB": "./.local/context.sqlite3"})
         self.assertEqual(settings.memory_db, "./.local/context.sqlite3")
+
+    def test_reactions_and_active_messages_are_configurable(self) -> None:
+        settings = Settings.from_values(
+            {
+                "REACTION_MODE": "like",
+                "ACTIVE_ENABLED": "true",
+                "ACTIVE_INTERVAL_MINUTES": "15",
+                "ACTIVE_TARGET_TYPE": "group",
+                "ACTIVE_TARGET_ID": "999",
+                "ACTIVE_PROMPT": "发一条近况",
+            }
+        )
+        settings.validate_for_bridge()
+        self.assertEqual(settings.reaction_mode, "like")
+        self.assertTrue(settings.active_enabled)
+        self.assertEqual(settings.active_interval_minutes, 15.0)
+
+    def test_active_messages_require_target_and_prompt(self) -> None:
+        settings = Settings.from_values({"ACTIVE_ENABLED": "true"})
+        with self.assertRaises(ConfigError):
+            settings.validate_for_bridge()
+
+    def test_active_target_must_be_numeric(self) -> None:
+        settings = Settings.from_values(
+            {
+                "ACTIVE_ENABLED": "true",
+                "ACTIVE_TARGET_ID": "not-a-qq-id",
+                "ACTIVE_PROMPT": "say something",
+            }
+        )
+        with self.assertRaises(ConfigError):
+            settings.validate_for_bridge()
+
+    def test_tool_allowlist_is_normalized(self) -> None:
+        settings = Settings.from_values({"TOOL_ALLOWLIST": " get_time, Safe "})
+        self.assertEqual(settings.tool_allowlist, ("get_time", "safe"))

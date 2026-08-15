@@ -42,6 +42,34 @@ The database contains only recent normalized chat fields needed for context;
 the raw OneBot event and access tokens are not stored. Leave `MEMORY_DB` empty
 to keep the current in-memory-only behavior.
 
+When a memory database is enabled, a private message such as `记住：我喜欢某个作品`
+stores an explicit user fact for that QQ account. `忘记：...` removes an exact
+fact. Facts are injected into the model as verified data; the bridge never
+creates facts from ordinary conversation automatically.
+
+Optional reactions and scheduled messages are disabled by default:
+
+```dotenv
+REACTION_MODE=off
+ACTIVE_ENABLED=false
+ACTIVE_INTERVAL_MINUTES=60
+ACTIVE_TARGET_TYPE=private
+ACTIVE_TARGET_ID=
+ACTIVE_PROMPT=
+TOOLS_ENABLED=false
+TOOL_ALLOWLIST=get_time
+```
+
+Set `REACTION_MODE=like` to allow the model marker
+`[[REACTION:emoji_id]]` to call NapCat's `set_msg_emoji_like`. Scheduled
+messages require a target and prompt; they send the model's generated bubbles
+at the configured interval.
+
+Tools are also opt-in and allowlisted. The current built-in example is
+`get_time`; a model can request it with `[[TOOL:get_time]]`, after which the
+tool result is fed back into the model. Tool code is registered in
+`onebot_llm_bridge/tools.py`; arbitrary shell commands are never executed.
+
 To check whether a new provider URL and key expose an OpenAI-compatible model
 list, run:
 
@@ -63,7 +91,7 @@ python .\control_panel.py
 On Windows, you can also double-click `start_control_panel.bat`.
 
 The panel manages chat/vision models, model detection, group policy, debounce,
-context, memory, service tokens, and optional NapCat launch paths. **Save
+context, explicit facts, reactions, scheduled messages, service tokens, and optional NapCat launch paths. **Save
 configuration** only writes `.env.local`; it does not restart anything. Use
 **Start all**, **Start NapCat**, or **Restart all** explicitly when you are
 ready to apply the saved values. **One-click diagnostics** probes each local
@@ -103,15 +131,15 @@ OneBot LLM Bridge 把这些问题拆成可配置模块，默认提供一套稳�
 
 ## 当前实现状态
 
-当前仓库已经包含 Milestone 0 和 Milestone 1 的最小骨架：
+当前仓库已经包含可运行的基础聊天链路和可选扩展：
 
 - `app.py`：监听 OneBot 11 HTTP Client 事件的 Bridge。
 - `bot_service.py`：调用 OpenAI 兼容模型的本地服务。
 - `onebot_llm_bridge/`：配置、事件标准化、回复策略、气泡格式化和 NapCat 动作客户端。
 - `control_panel.py`：可选的 Windows 控制台，管理配置和本地服务启动。
-- `tests/`：23 个不依赖真实 QQ 和 API Key 的单元测试。
+- `tests/`：不依赖真实 QQ 和 API Key 的单元测试。
 
-当前版本已经可以跑通“私聊文本 -> 防抖合并 -> 模型 -> NapCat 发回”的基本链路，并支持 smart 群聊短时续聊、引用回复、私聊输入状态、可选图片识别、持久化上下文和 Windows 控制台。
+当前版本已经可以跑通“私聊文本 -> 防抖合并 -> 模型 -> NapCat 发回”的基本链路，并支持 smart 群聊的基础话题相关性判断、引用回复、私聊输入状态、可选图片识别、显式事实记忆、可选表情回应、定时主动消息和 Windows 控制台。
 
 在填写 `examples/.env.example` 的副本后，可以分别启动：
 
@@ -128,9 +156,9 @@ python .\app.py
 python -m unittest discover -s tests -q
 ```
 
-## 预计支持的功能
+## 后续路线
 
-### 第一阶段：能稳定聊天
+### 已完成：能稳定聊天
 
 - OneBot 11 HTTP Client 事件接收。
 - OneBot 11 HTTP Server 动作调用。
@@ -143,19 +171,18 @@ python -m unittest discover -s tests -q
 - 本地 SQLite 运行记录。
 - Windows 控制台和命令行启动方式。
 
-### 第二阶段：更像一个真正的聊天程序
+### 已完成：聊天运行时增强
 
-- 结构化决策：是否回复、回复哪个话题、是否引用、是否回应表情。
-- 记忆摘要和用户事实。
+- 基础结构化决策：是否回复、是否续聊、是否引用、是否回应表情。
+- 显式用户事实记忆；自动摘要仍在后续路线中。
 - 图片输入和 Base64 转换。
 - 模型预设与 `/models` 检测。
-- 可选的 Supabase 共享记忆。
+- 可选的 Supabase 共享记忆仍未实现。
+- 可选表情回应、定时主动消息和受白名单约束的 `get_time` 工具调用。
 - 运行状态、日志和错误提示。
 
-### 第三阶段：扩展生态
+### 未完成：扩展生态
 
-- 定时主动消息。
-- 工具调用和插件。
 - 多账号、多群独立配置。
 - Docker/Linux 部署。
 - WebSocket OneBot 适配器。

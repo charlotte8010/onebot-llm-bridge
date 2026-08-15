@@ -374,3 +374,31 @@ vision. `separate` sends the image to a second provider and appends its short
 description to the normal text prompt. This is the safer default for a
 text-only main model. Image downloads are restricted to HTTP(S), are capped at
 10 MiB, and failures degrade to text-only processing.
+
+## Current optional runtime extensions
+
+The runnable bridge also includes the following opt-in extensions. They are
+kept behind configuration switches so the default path remains predictable.
+
+- `MEMORY_DB` persists recent normalized messages and explicit facts. Facts are
+  only written by an exact `记住：...` / `remember: ...` command and can be
+  removed with `忘记：...` / `forget: ...`; ordinary model output cannot write
+  facts.
+- `GROUP_MODE=smart` keeps a short follow-up window after the bridge replies.
+  The bridge checks short follow-ups, cue words, and simple term overlap before
+  treating an unmentioned message as part of the same topic.
+- `REACTION_MODE=like` enables the final response marker
+  `[[REACTION:emoji_id]]`, which is translated into NapCat's
+  `set_msg_emoji_like` action. The marker is removed before text bubbles are
+  sent.
+- `ACTIVE_ENABLED=true` starts one daemon timer for a configured private or
+  group target. The timer is cancelled by `Bridge.shutdown()` and never runs
+  arbitrary code.
+- `TOOLS_ENABLED=true` still requires every tool name to appear in
+  `TOOL_ALLOWLIST`. Tool requests have no arguments and are resolved in one
+  bounded round; arbitrary shell, filesystem, and network execution are not
+  exposed through the model.
+
+The control panel writes these values to `.env.local` only. Saving does not
+restart a running service; the operator must explicitly apply or restart the
+services after reviewing the values.

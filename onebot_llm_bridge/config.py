@@ -109,6 +109,14 @@ class Settings:
     debounce_seconds: float = 3.0
     debounce_random: bool = False
     followup_seconds: float = 120.0
+    reaction_mode: str = "off"
+    active_enabled: bool = False
+    active_interval_minutes: float = 60.0
+    active_target_type: str = "private"
+    active_target_id: str = ""
+    active_prompt: str = ""
+    tools_enabled: bool = False
+    tool_allowlist: tuple[str, ...] = ()
     typing_status: bool = True
     context_messages: int = 20
     persona_file: str = ""
@@ -119,6 +127,12 @@ class Settings:
         group_mode = _text(values, "GROUP_MODE", "mention").lower()
         if group_mode not in {"mention", "smart", "all", "off"}:
             raise ConfigError("GROUP_MODE must be mention, smart, all, or off")
+        reaction_mode = _text(values, "REACTION_MODE", "off").lower()
+        if reaction_mode not in {"off", "like"}:
+            raise ConfigError("REACTION_MODE must be off or like")
+        active_target_type = _text(values, "ACTIVE_TARGET_TYPE", "private").lower()
+        if active_target_type not in {"private", "group"}:
+            raise ConfigError("ACTIVE_TARGET_TYPE must be private or group")
         vision_mode = _text(values, "VISION_MODE", "off").lower()
         if vision_mode not in {"off", "direct", "separate"}:
             raise ConfigError("VISION_MODE must be off, direct, or separate")
@@ -133,6 +147,9 @@ class Settings:
             raise ConfigError("BOT_QQ must be a QQ number")
         bot_names = tuple(
             item.strip() for item in _text(values, "BOT_NAMES").split(",") if item.strip()
+        )
+        tool_allowlist = tuple(
+            item.strip().lower() for item in _text(values, "TOOL_ALLOWLIST").split(",") if item.strip()
         )
         debounce_value = _text(values, "DEBOUNCE_SECONDS", "3")
         debounce_random = debounce_value.lower() == "random"
@@ -172,6 +189,14 @@ class Settings:
             debounce_seconds=debounce_seconds,
             debounce_random=debounce_random,
             followup_seconds=_float(values, "FOLLOWUP_SECONDS", 120.0, 0.0, 3600.0),
+            reaction_mode=reaction_mode,
+            active_enabled=_text(values, "ACTIVE_ENABLED", "false").lower() in {"1", "true", "yes", "on"},
+            active_interval_minutes=_float(values, "ACTIVE_INTERVAL_MINUTES", 60.0, 1.0, 10080.0),
+            active_target_type=active_target_type,
+            active_target_id=_text(values, "ACTIVE_TARGET_ID"),
+            active_prompt=_text(values, "ACTIVE_PROMPT"),
+            tools_enabled=_text(values, "TOOLS_ENABLED", "false").lower() in {"1", "true", "yes", "on"},
+            tool_allowlist=tool_allowlist,
             typing_status=_text(values, "TYPING_STATUS", "true").lower()
             in {"1", "true", "yes", "on"},
             context_messages=_int(values, "CONTEXT_MESSAGES", 20, 0, 100),
@@ -207,6 +232,10 @@ class Settings:
     def validate_for_bridge(self) -> None:
         if self.bridge_host not in {"127.0.0.1", "localhost", "::1"} and not self.napcat_event_token:
             raise ConfigError("NAPCAT_EVENT_TOKEN is required when BRIDGE_HOST is not loopback")
+        if self.active_enabled and (not self.active_target_id or not self.active_prompt):
+            raise ConfigError("ACTIVE_TARGET_ID and ACTIVE_PROMPT are required when ACTIVE_ENABLED is true")
+        if self.active_enabled and not self.active_target_id.isdigit():
+            raise ConfigError("ACTIVE_TARGET_ID must be a numeric QQ or group id")
 
     def debounce_delay(self) -> float:
         if self.debounce_random:

@@ -46,3 +46,13 @@ class SQLiteMemoryStoreTests(unittest.TestCase):
             self.assertEqual([item.text for item in store.load("private:123", 20)], ["message-1"])
             self.assertEqual([item.text for item in store.load("private:456", 20)], ["message-1"])
             store.close()
+
+    def test_facts_can_be_saved_loaded_and_removed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteMemoryStore(Path(directory) / "context.sqlite3")
+            store.add_fact("user:123", "喜欢记录的地平线", "42")
+            store.add_fact("user:123", "喜欢记录的地平线", "43")
+            self.assertEqual(store.load_facts("user:123"), ["喜欢记录的地平线"])
+            self.assertTrue(store.remove_fact("user:123", "喜欢记录的地平线"))
+            self.assertEqual(store.load_facts("user:123"), [])
+            store.close()

@@ -1,15 +1,18 @@
 import threading
+import tempfile
 import time
 import unittest
+from pathlib import Path
 
 from onebot_llm_bridge.config import Settings
-from onebot_llm_bridge.services import Bridge
+from onebot_llm_bridge.services import Bridge, _related_topic
 
 
 class FakeNapCat:
     def __init__(self):
         self.sent = []
         self.quoted = []
+        self.reactions = []
 
     def send_private(self, user_id, message, *, reply_to=None):
         self.sent.append(("private", user_id, message))
@@ -21,6 +24,10 @@ class FakeNapCat:
         self.sent.append(("group", group_id, message))
         if reply_to:
             self.quoted.append(("group", group_id, reply_to))
+        return {"status": "ok"}
+
+    def set_msg_emoji_like(self, message_id, emoji_id):
+        self.reactions.append((message_id, emoji_id))
         return {"status": "ok"}
 
 
@@ -141,6 +148,39 @@ class BridgeTests(unittest.TestCase):
         self.assertTrue(bridge.handle_event(first)["handled"])
         self.assertTrue(bridge.handle_event(second)["handled"])
 
+    def test_group_smart_mode_does_not_continue_into_unrelated_question(self):
+        settings = Settings.from_values(
+            {
+                "LLM_API_KEY": "key",
+                "LLM_BASE_URL": "https://example.test/v1",
+                "LLM_MODEL": "chat",
+                "GROUP_MODE": "smart",
+                "GROUP_ALLOWLIST": "999",
+                "FOLLOWUP_SECONDS": "30",
+            }
+        )
+        napcat = FakeNapCat()
+        bridge = Bridge(settings, napcat=napcat, bot_request=lambda payload: {"bubbles": ["ok"]})
+        first = {
+            "post_type": "message",
+            "message_type": "group",
+            "group_id": 999,
+            "user_id": 123,
+            "message_id": 10,
+            "message": "[@bot] 讨论今天的电影",
+            "to_me": True,
+        }
+        unrelated = {**first, "message_id": 11, "message": "最近公司搬家以后通勤时间变长了怎么办？", "to_me": False}
+        self.assertTrue(bridge.handle_event(first)["handled"])
+        result = bridge.handle_event(unrelated)
+        self.assertFalse(result["handled"])
+        self.assertEqual(result["reason"], "not_addressed")
+
+    def test_topic_relation_uses_short_followups_and_shared_terms(self):
+        self.assertTrue(_related_topic("真的吗", "今天聊电影"))
+        self.assertTrue(_related_topic("那部电影的结局", "今天聊电影"))
+        self.assertFalse(_related_topic("最近公司搬家以后通勤时间变长了怎么办？", "今天聊电影"))
+
     def test_group_reply_event_is_sent_with_quote(self):
         settings = self.settings()
         napcat = FakeNapCat()
@@ -188,3 +228,53 @@ class BridgeTests(unittest.TestCase):
         self.assertTrue(result["handled"])
         self.assertEqual(calls[0]["images"], ["data:image/png;base64,abc"])
         self.assertEqual(resolver.segments[0]["type"], "image")
+
+    def test_memory_command_is_saved_without_calling_model(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings.from_values(
+                {
+                    "LLM_API_KEY": "key",
+                    "LLM_BASE_URL": "https://example.test/v1",
+                    "LLM_MODEL": "chat",
+                    "MEMORY_DB": str(Path(directory) / "memory.sqlite3"),
+                }
+            )
+            napcat = FakeNapCat()
+            calls = []
+            bridge = Bridge(settings, napcat=napcat, bot_request=lambda payload: calls.append(payload))
+            result = bridge.handle_event(
+                {
+                    "post_type": "message",
+                    "message_type": "private",
+                    "user_id": 123,
+                    "message_id": 1,
+                    "message": "记住：喜欢记录的地平线",
+                }
+            )
+            bridge.shutdown()
+            self.assertTrue(result["handled"])
+            self.assertEqual(calls, [])
+            self.assertEqual(napcat.sent[-1][2], "记住了")
+
+    def test_reaction_result_uses_napcat_action_when_enabled(self):
+        settings = Settings.from_values(
+            {
+                "LLM_API_KEY": "key",
+                "LLM_BASE_URL": "https://example.test/v1",
+                "LLM_MODEL": "chat",
+                "REACTION_MODE": "like",
+            }
+        )
+        napcat = FakeNapCat()
+        bridge = Bridge(settings, napcat=napcat, bot_request=lambda payload: {"bubbles": [], "reaction_id": "128077"})
+        result = bridge.handle_event(
+            {
+                "post_type": "message",
+                "message_type": "private",
+                "user_id": 123,
+                "message_id": 9,
+                "message": "好好笑",
+            }
+        )
+        self.assertTrue(result["handled"])
+        self.assertEqual(napcat.reactions, [("9", "128077")])

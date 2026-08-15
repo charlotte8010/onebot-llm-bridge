@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import re
 import threading
 import time
 from collections import defaultdict, deque
@@ -14,15 +15,41 @@ from urllib.request import Request, urlopen
 
 from .napcat import NapCatClient, NapCatError
 from .config import Settings
-from .formatting import split_bubbles
+from .formatting import parse_reply_actions, split_bubbles
 from .images import ImageResolver
 from .memory import SQLiteMemoryStore
 from .models import EventError, NormalizedMessage, is_meaningful, json_context
 from .policy import decide_reply
 from .providers import OpenAICompatibleProvider, ProviderError
+from .tools import ToolRegistry, parse_tool_calls
 
 
 MAX_BODY_BYTES = 1_048_576
+_REMEMBER_RE = re.compile(r"^(?:记住|remember)\s*[:：]\s*(.+)$", re.IGNORECASE)
+_FORGET_RE = re.compile(r"^(?:忘记|forget)\s*[:：]\s*(.+)$", re.IGNORECASE)
+
+
+def _topic_terms(text: str) -> set[str]:
+    normalized = text.lower().strip()
+    terms = set(re.findall(r"[a-z0-9_]{2,}", normalized))
+    for chunk in re.findall(r"[\u4e00-\u9fff]+", normalized):
+        terms.update(chunk[index : index + 2] for index in range(max(0, len(chunk) - 1)))
+    return terms
+
+
+def _related_topic(current: str, previous: str) -> bool:
+    current = current.strip()
+    previous = previous.strip()
+    if not previous or len(current) <= 8:
+        return True
+    cue_starts = ("然后", "那", "所以", "真的吗", "对啊", "确实")
+    if current.startswith(cue_starts):
+        return True
+    if any(current.startswith(marker) for marker in ("为什么", "怎么")) and len(current) <= 20:
+        return True
+    current_terms = _topic_terms(current)
+    previous_terms = _topic_terms(previous)
+    return bool(current_terms and previous_terms and current_terms & previous_terms)
 
 
 class PendingBatch:
@@ -106,6 +133,7 @@ class BotService:
             )
         else:
             self.vision_provider = vision_provider
+        self.tools = ToolRegistry()
 
     def persona(self) -> str:
         if not self.settings.persona_file:
@@ -124,11 +152,20 @@ class BotService:
         system = (
             "You are a helpful QQ chat assistant. Reply naturally and concisely. "
             "Do not invent user facts. Return only the reply text. "
-            "Use [[BUBBLE]] between separate QQ bubbles when useful."
+            "Use [[BUBBLE]] between separate QQ bubbles when useful. "
+            "When a simple QQ reaction is more natural than text, you may append "
+            "[[REACTION:emoji_id]] using a numeric QQ emoji id."
         )
+        if self.settings.tools_enabled:
+            system += " Available allowlisted tools may be requested with [[TOOL:tool_name]]."
         persona = self.persona()
         if persona:
             system += "\n\nUser-provided persona:\n" + persona
+        facts = payload.get("facts", [])
+        if isinstance(facts, list) and facts:
+            system += "\n\nVerified user facts. Do not add or alter facts:\n- " + "\n- ".join(
+                str(item).strip() for item in facts if str(item).strip()
+            )
         user_prompt = f"Recent context:\n{context_text}\n\nNew message:\n{message}"
         images = [str(item) for item in payload.get("images", []) if isinstance(item, str)]
         vision_note = ""
@@ -163,10 +200,24 @@ class BotService:
                 raise
             print("[vision] main model rejected image input; retrying as text")
             content = self.provider.complete(messages, images=[])
-        bubbles = split_bubbles(content)
-        if not bubbles:
+        tool_calls = parse_tool_calls(content) if self.settings.tools_enabled else []
+        if tool_calls:
+            results = self.tools.run_allowed(tool_calls, self.settings.tool_allowlist)
+            tool_text = "\n".join(f"{item['name']}: {item['result']}" for item in results)
+            if not tool_text:
+                tool_text = "No requested tool is enabled in the allowlist."
+            messages = [
+                *messages,
+                {"role": "assistant", "content": content},
+                {"role": "user", "content": "Tool results:\n" + tool_text + "\nNow answer the original request without tool markers."},
+            ]
+            content = self.provider.complete(messages, images=[])
+        bubbles, reaction_id = parse_reply_actions(content)
+        if self.settings.reaction_mode == "off":
+            reaction_id = None
+        if not bubbles and not reaction_id:
             raise ProviderError("model reply contained no usable bubbles")
-        return {"reply": content, "bubbles": bubbles}
+        return {"reply": content, "bubbles": bubbles, "reaction_id": reaction_id}
 
 
 class BotServiceHandler(JsonHandler):
@@ -256,7 +307,12 @@ class Bridge:
         self._state_lock = threading.RLock()
         self._pending: dict[str, PendingBatch] = {}
         self._topic_until: dict[str, float] = {}
+        self._topic_text: dict[str, str] = {}
         self._loaded_contexts: set[str] = set()
+        self._active_timer: threading.Timer | None = None
+        self._shutdown = False
+        if settings.active_enabled and settings.active_target_id and settings.active_prompt:
+            self._schedule_active_message()
 
     def _context_for(self, key: str) -> deque[NormalizedMessage]:
         context = self._contexts[key]
@@ -278,7 +334,10 @@ class Bridge:
         active_topic = False
         if message.conversation_type == "group" and self.settings.group_mode == "smart":
             with self._state_lock:
-                active_topic = self._topic_until.get(message.conversation_key, 0.0) > time.time()
+                active_topic = (
+                    self._topic_until.get(message.conversation_key, 0.0) > time.time()
+                    and _related_topic(message.text, self._topic_text.get(message.conversation_key, ""))
+                )
         return decide_reply(
             message,
             group_mode=self.settings.group_mode,
@@ -314,6 +373,7 @@ class Bridge:
                 "context": json.loads(json_context(context)),
                 "conversation": first.conversation_key,
                 "images": images,
+                "facts": self.memory_store.load_facts(f"user:{first.sender_id}") if self.memory_store else [],
             }
             self._set_typing(first.sender_id, True)
             try:
@@ -327,7 +387,20 @@ class Bridge:
                 else split_bubbles(str(result.get("reply", "")))
             )
             if not bubbles:
+                reaction_id = str(result.get("reaction_id", "")).strip()
+                if reaction_id and self.settings.reaction_mode == "like":
+                    try:
+                        self.napcat.set_msg_emoji_like(first.message_id, reaction_id)
+                    except NapCatError as exc:
+                        print(f"reaction failed: {type(exc).__name__}")
+                    return {"handled": True, "reason": "reaction", "reaction_id": reaction_id}
                 return {"handled": False, "reason": "empty_reply"}
+            reaction_id = str(result.get("reaction_id", "")).strip()
+            if reaction_id and self.settings.reaction_mode == "like":
+                try:
+                    self.napcat.set_msg_emoji_like(first.message_id, reaction_id)
+                except NapCatError as exc:
+                    print(f"reaction failed: {type(exc).__name__}")
             for bubble in bubbles:
                 if first.conversation_type == "private":
                     if mode == "quote_reply":
@@ -342,13 +415,75 @@ class Bridge:
             if first.conversation_type == "group" and self.settings.group_mode == "smart":
                 with self._state_lock:
                     self._topic_until[first.conversation_key] = time.time() + self.settings.followup_seconds
+                    self._topic_text[first.conversation_key] = " ".join(item.text for item in messages if item.text)
             return {"handled": True, "reason": "reply", "bubbles": len(bubbles)}
+
+    def _handle_memory_command(self, message: NormalizedMessage, mode: str) -> dict[str, Any] | None:
+        if self.memory_store is None:
+            return None
+        remember = _REMEMBER_RE.match(message.text.strip())
+        forget = _FORGET_RE.match(message.text.strip())
+        if not remember and not forget:
+            return None
+        scope = f"user:{message.sender_id}"
+        if remember:
+            self.memory_store.add_fact(scope, remember.group(1), message.message_id)
+            acknowledgement = "记住了"
+        else:
+            removed = self.memory_store.remove_fact(scope, forget.group(1))
+            acknowledgement = "忘掉了" if removed else "我没有记过这个"
+        if message.conversation_type == "private":
+            self.napcat.send_private(message.conversation_id, acknowledgement)
+        elif mode == "quote_reply":
+            self.napcat.send_group(message.conversation_id, acknowledgement, reply_to=message.message_id)
+        else:
+            self.napcat.send_group(message.conversation_id, acknowledgement)
+        return {"handled": True, "reason": "memory_updated"}
+
+    def _schedule_active_message(self) -> None:
+        if self._active_timer is not None:
+            self._active_timer.cancel()
+        self._active_timer = threading.Timer(
+            self.settings.active_interval_minutes * 60.0,
+            self._active_message_tick,
+        )
+        self._active_timer.daemon = True
+        self._active_timer.start()
+
+    def _active_message_tick(self) -> None:
+        try:
+            payload = {
+                "message": self.settings.active_prompt,
+                "context": [],
+                "conversation": f"{self.settings.active_target_type}:{self.settings.active_target_id}",
+                "images": [],
+                "facts": [],
+            }
+            result = self.bot_request(payload)
+            bubbles = result.get("bubbles")
+            if not isinstance(bubbles, list):
+                bubbles = split_bubbles(str(result.get("reply", "")))
+            for bubble in (str(item).strip() for item in bubbles):
+                if not bubble:
+                    continue
+                if self.settings.active_target_type == "group":
+                    self.napcat.send_group(self.settings.active_target_id, bubble)
+                else:
+                    self.napcat.send_private(self.settings.active_target_id, bubble)
+        except Exception as exc:
+            print(f"active message failed: {type(exc).__name__}: {exc}")
+        finally:
+            if self.settings.active_enabled and not self._shutdown:
+                self._schedule_active_message()
 
     def handle_event(self, event: Mapping[str, Any]) -> dict[str, Any]:
         message = NormalizedMessage.from_onebot(event)
         decision = self._decision(message)
         if not is_meaningful(message) or not decision.should_reply:
             return {"handled": False, "reason": decision.reason}
+        memory_result = self._handle_memory_command(message, decision.mode)
+        if memory_result is not None:
+            return memory_result
         with self._state_lock:
             context = self._record_message(message)
         result = self._process_batch(
@@ -366,6 +501,9 @@ class Bridge:
         decision = self._decision(message)
         if not is_meaningful(message) or not decision.should_reply:
             return {"accepted": False, "reason": decision.reason}
+        memory_result = self._handle_memory_command(message, decision.mode)
+        if memory_result is not None:
+            return {"accepted": True, **memory_result}
         key = message.conversation_key
         with self._state_lock:
             context = self._record_message(message)
@@ -406,12 +544,15 @@ class Bridge:
             print(f"background batch failed: {type(exc).__name__}: {exc}")
 
     def shutdown(self) -> None:
+        self._shutdown = True
         with self._state_lock:
             batches = list(self._pending.values())
             self._pending.clear()
         for batch in batches:
             if batch.timer is not None:
                 batch.timer.cancel()
+        if self._active_timer is not None:
+            self._active_timer.cancel()
         if self.memory_store is not None:
             self.memory_store.close()
 

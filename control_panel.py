@@ -662,9 +662,19 @@ class ControlPanel(tk.Tk):
         self.followup = self._entry(behavior, 4, "继续话题秒数", "FOLLOWUP_SECONDS", "120", column=2)
         self.context_messages = self._entry(behavior, 5, "上下文条数", "CONTEXT_MESSAGES", "20")
         self.memory_db = self._entry(behavior, 5, "持久化记忆库", "MEMORY_DB", "", column=2)
+        self.reaction_mode = self._combo(behavior, 6, 2, "表情回应", "REACTION_MODE", ("off", "like"), "off")
         self.typing = tk.BooleanVar(value=self._value("TYPING_STATUS", "true").lower() in {"1", "true", "yes", "on"})
         ttk.Checkbutton(behavior, text="显示输入状态", variable=self.typing).grid(row=6, column=0, columnspan=2, sticky="w", pady=4)
-        self.persona = self._entry(behavior, 7, "Persona 文件", "PERSONA_FILE", "")
+        self.active_enabled = tk.BooleanVar(value=self._value("ACTIVE_ENABLED", "false").lower() in {"1", "true", "yes", "on"})
+        ttk.Checkbutton(behavior, text="启用定时主动消息", variable=self.active_enabled).grid(row=7, column=0, columnspan=2, sticky="w", pady=4)
+        self.tools_enabled = tk.BooleanVar(value=self._value("TOOLS_ENABLED", "false").lower() in {"1", "true", "yes", "on"})
+        ttk.Checkbutton(behavior, text="启用白名单工具", variable=self.tools_enabled).grid(row=7, column=2, columnspan=2, sticky="w", pady=4)
+        self.active_interval = self._entry(behavior, 8, "主动消息间隔(分钟)", "ACTIVE_INTERVAL_MINUTES", "60")
+        self.active_target_type = self._combo(behavior, 8, 2, "主动消息类型", "ACTIVE_TARGET_TYPE", ("private", "group"), "private")
+        self.active_target_id = self._entry(behavior, 9, "主动消息目标", "ACTIVE_TARGET_ID", "")
+        self.active_prompt = self._entry(behavior, 10, "主动消息提示", "ACTIVE_PROMPT", "")
+        self.persona = self._entry(behavior, 11, "Persona 文件", "PERSONA_FILE", "")
+        self.tool_allowlist = self._entry(behavior, 12, "工具白名单", "TOOL_ALLOWLIST", "get_time", column=2)
 
         self.settings = network_content
         network = ttk.LabelFrame(self.settings, text="服务与 Token", padding=14, style="Section.TLabelframe")
@@ -857,6 +867,10 @@ class ControlPanel(tk.Tk):
             "VISION_MODEL": self.vision_model.get().strip(), "VISION_MAX_TOKENS": self.vision_max_tokens.get().strip(), "VISION_TIMEOUT_SECONDS": self.vision_timeout.get().strip(),
             "GROUP_MODE": self.group_mode.get().strip(), "GROUP_ALLOWLIST": self.group_allowlist.get().strip(), "BOT_QQ": self.bot_qq.get().strip(), "BOT_NAMES": self.bot_names.get().strip(),
             "DEBOUNCE_SECONDS": self.debounce.get().strip(), "FOLLOWUP_SECONDS": self.followup.get().strip(), "CONTEXT_MESSAGES": self.context_messages.get().strip(), "MEMORY_DB": self.memory_db.get().strip(),
+            "REACTION_MODE": self.reaction_mode.get().strip(), "ACTIVE_ENABLED": "true" if self.active_enabled.get() else "false",
+            "ACTIVE_INTERVAL_MINUTES": self.active_interval.get().strip(), "ACTIVE_TARGET_TYPE": self.active_target_type.get().strip(),
+            "ACTIVE_TARGET_ID": self.active_target_id.get().strip(), "ACTIVE_PROMPT": self.active_prompt.get().strip(),
+            "TOOLS_ENABLED": "true" if self.tools_enabled.get() else "false", "TOOL_ALLOWLIST": self.tool_allowlist.get().strip(),
             "TYPING_STATUS": "true" if self.typing.get() else "false", "PERSONA_FILE": self.persona.get().strip(),
             "NAPCAT_API_URL": self.napcat_url.get().strip(), "NAPCAT_ACCESS_TOKEN": self.napcat_access.get().strip(), "NAPCAT_EVENT_TOKEN": self.event_token.get().strip(),
             "BOT_SERVICE_TOKEN": self.service_token.get().strip(), "BRIDGE_PORT": self.bridge_port.get().strip(), "BOT_SERVICE_PORT": self.bot_port.get().strip(),

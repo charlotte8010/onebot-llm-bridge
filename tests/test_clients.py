@@ -98,3 +98,16 @@ class ClientTests(unittest.TestCase):
         client.send_group("456", "reply", reply_to="789")
         payload = json.loads(requests[0].data.decode("utf-8"))
         self.assertEqual(payload["message"][0], {"type": "reply", "data": {"id": "789"}})
+
+    def test_napcat_client_can_send_emoji_like(self) -> None:
+        requests = []
+
+        def opener(request, timeout):
+            requests.append(request)
+            return FakeResponse({"status": "ok", "retcode": 0, "data": {}})
+
+        client = NapCatClient("http://127.0.0.1:3000", opener=opener)
+        client.set_msg_emoji_like("789", "128077")
+        payload = json.loads(requests[0].data.decode("utf-8"))
+        self.assertEqual(payload["message_id"], "789")
+        self.assertEqual(payload["emoji_id"], "128077")

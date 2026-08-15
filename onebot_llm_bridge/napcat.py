@@ -87,3 +87,9 @@ class NapCatClient:
             "set_input_status",
             {"user_id": user_id, "event_type": 1 if active else 0},
         )
+
+    def set_msg_emoji_like(self, message_id: str, emoji_id: str) -> dict[str, Any]:
+        return self.call(
+            "set_msg_emoji_like",
+            {"message_id": message_id, "emoji_id": emoji_id},
+        )

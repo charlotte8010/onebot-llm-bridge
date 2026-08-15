@@ -157,6 +157,14 @@ BOT_SERVICE_TOKEN=Bridge和Bot_service之间的Token
 DEBOUNCE_SECONDS=random
 FOLLOWUP_SECONDS=120
 TYPING_STATUS=true
+REACTION_MODE=off
+ACTIVE_ENABLED=false
+ACTIVE_INTERVAL_MINUTES=60
+ACTIVE_TARGET_TYPE=private
+ACTIVE_TARGET_ID=
+ACTIVE_PROMPT=
+TOOLS_ENABLED=false
+TOOL_ALLOWLIST=get_time
 ```
 
 群聊需要识别机器人时，再填写机器人的 QQ 号和称呼：
@@ -167,6 +175,26 @@ BOT_NAMES=bot,助手,你的机器人昵称
 ```
 
 `FOLLOWUP_SECONDS` 只影响 `GROUP_MODE=smart`：机器人回复后，在这个时间内可以继续当前话题而不必再次 @。`TYPING_STATUS=false` 会关闭私聊中的“正在输入”状态。
+
+如果配置了 `MEMORY_DB`，可以在私聊中发送 `记住：内容` 保存明确事实，发送
+`忘记：内容` 删除完全相同的事实。普通聊天不会自动写入事实，避免把玩笑误记成偏好。
+
+`REACTION_MODE=like` 允许模型使用 `[[REACTION:emoji_id]]` 对收到的消息发送 QQ 表情回应；默认关闭。
+主动消息也默认关闭。开启时必须填写目标 QQ/群号和提示词，例如：
+
+```dotenv
+ACTIVE_ENABLED=true
+ACTIVE_INTERVAL_MINUTES=120
+ACTIVE_TARGET_TYPE=private
+ACTIVE_TARGET_ID=你的QQ号
+ACTIVE_PROMPT=想一句自然的近况，发一条简短消息
+```
+
+主动消息由 Bridge 定时调用模型并通过 NapCat 发送，关闭控制台或 Bridge 后定时器会停止。
+
+工具调用默认关闭。开启后仍然只允许 `TOOL_ALLOWLIST` 中的工具；当前内置
+`get_time`，模型通过 `[[TOOL:get_time]]` 请求，Bridge 把结果交回模型后再发送最终消息。
+不要把任意命令执行器加入白名单。
 
 生成随机 Token 可以使用：
 
