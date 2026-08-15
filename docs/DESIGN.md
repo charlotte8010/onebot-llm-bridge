@@ -267,7 +267,7 @@ BOT_SERVICE_TOKEN=replace-me
 GROUP_MODE=mention
 GROUP_ALLOWLIST=
 REPLY_DELAY=random
-DEBOUNCE_SECONDS=3
+DEBOUNCE_SECONDS=random
 CONTEXT_MESSAGES=20
 PERSONA_FILE=./.local/persona_prompt.txt
 MEMORY_BACKEND=sqlite
@@ -275,6 +275,8 @@ MEMORY_DB=./.local/memory.sqlite3
 ```
 
 配置加载顺序要固定并写入文档：命令行参数 > `.env.local` > `.env` > 默认值。启动时打印配置摘要，但永远不打印完整 Key、Token、Cookie 或 Secret。
+
+`DEBOUNCE_SECONDS=random` 时从 3、4、5、6 秒中随机选择；填写数字时使用固定秒数。私聊新消息会重新选择并重置窗口，群聊只使用首条消息创建的窗口。
 
 ## 10. 安全设计
 
@@ -352,4 +354,3 @@ MEMORY_DB=./.local/memory.sqlite3
 ### 为什么把决策和语言生成分开
 
 “要不要回复”与“具体怎么说”是两个不同问题。分开以后，可以用便宜快速的模型做决策，用更强的模型生成回复，也能在模型异常时安全地选择不回复。
-

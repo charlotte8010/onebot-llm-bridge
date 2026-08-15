@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from onebot_llm_bridge.config import ConfigError, Settings, parse_env_file
 
@@ -24,6 +25,13 @@ class ConfigTests(unittest.TestCase):
     def test_debounce_seconds_is_configurable(self) -> None:
         settings = Settings.from_values({"DEBOUNCE_SECONDS": "4.5"})
         self.assertEqual(settings.debounce_seconds, 4.5)
+
+    def test_random_debounce_uses_only_three_to_six_seconds(self) -> None:
+        settings = Settings.from_values({"DEBOUNCE_SECONDS": "random"})
+        self.assertTrue(settings.debounce_random)
+        with patch("onebot_llm_bridge.config.random.choice", return_value=5.0) as choice:
+            self.assertEqual(settings.debounce_delay(), 5.0)
+        choice.assert_called_once_with((3.0, 4.0, 5.0, 6.0))
 
     def test_invalid_group_allowlist_is_rejected(self) -> None:
         with self.assertRaises(ConfigError):

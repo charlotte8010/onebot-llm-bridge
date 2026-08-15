@@ -254,11 +254,11 @@ class Bridge:
             if batch is None:
                 batch = PendingBatch([message], context)
                 self._pending[key] = batch
-                self._schedule_batch(key, self.settings.debounce_seconds)
+                self._schedule_batch(key, self.settings.debounce_delay())
             else:
                 batch.messages.append(message)
                 if message.conversation_type == "private":
-                    self._schedule_batch(key, self.settings.debounce_seconds)
+                    self._schedule_batch(key, self.settings.debounce_delay())
             batch_size = len(batch.messages)
         return {"accepted": True, "reason": decision.reason, "batch_size": batch_size}
 

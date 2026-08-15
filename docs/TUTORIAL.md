@@ -152,6 +152,9 @@ NAPCAT_ACCESS_TOKEN=NapCat_HTTP_Server_Token
 NAPCAT_EVENT_TOKEN=NapCat_HTTP_Client_Token
 
 BOT_SERVICE_TOKEN=Bridge和Bot_service之间的Token
+
+# random 表示从 3、4、5、6 秒中随机等待，也可以写成固定数字
+DEBOUNCE_SECONDS=random
 ```
 
 生成随机 Token 可以使用：
@@ -356,4 +359,3 @@ python -m unittest discover -q
 - 模型空回复不会发空消息。
 - 重启后不会启动两个 Bridge。
 - `.env.local`、图片、SQLite 和聊天记录不会进入 Git。
-

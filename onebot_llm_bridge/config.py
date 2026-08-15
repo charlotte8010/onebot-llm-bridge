@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
@@ -98,6 +99,7 @@ class Settings:
     group_mode: str = "mention"
     group_allowlist: frozenset[str] = frozenset()
     debounce_seconds: float = 3.0
+    debounce_random: bool = False
     context_messages: int = 20
     persona_file: str = ""
 
@@ -112,6 +114,13 @@ class Settings:
         for group_id in allowlist:
             if not group_id.isdigit():
                 raise ConfigError("GROUP_ALLOWLIST must contain comma-separated QQ numbers")
+        debounce_value = _text(values, "DEBOUNCE_SECONDS", "3")
+        debounce_random = debounce_value.lower() == "random"
+        debounce_seconds = (
+            3.0
+            if debounce_random
+            else _float(values, "DEBOUNCE_SECONDS", 3.0, 0.0, 60.0)
+        )
         return cls(
             llm_api_key=_text(values, "LLM_API_KEY"),
             llm_base_url=_text(values, "LLM_BASE_URL").rstrip("/"),
@@ -128,7 +137,8 @@ class Settings:
             bot_service_token=_text(values, "BOT_SERVICE_TOKEN"),
             group_mode=group_mode,
             group_allowlist=allowlist,
-            debounce_seconds=_float(values, "DEBOUNCE_SECONDS", 3.0, 0.0, 60.0),
+            debounce_seconds=debounce_seconds,
+            debounce_random=debounce_random,
             context_messages=_int(values, "CONTEXT_MESSAGES", 20, 0, 100),
             persona_file=_text(values, "PERSONA_FILE"),
         )
@@ -149,3 +159,8 @@ class Settings:
     def validate_for_bridge(self) -> None:
         if self.bridge_host not in {"127.0.0.1", "localhost", "::1"} and not self.napcat_event_token:
             raise ConfigError("NAPCAT_EVENT_TOKEN is required when BRIDGE_HOST is not loopback")
+
+    def debounce_delay(self) -> float:
+        if self.debounce_random:
+            return random.choice((3.0, 4.0, 5.0, 6.0))
+        return self.debounce_seconds
