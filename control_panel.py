@@ -912,12 +912,12 @@ class ControlPanel(tk.Tk):
         self.active_target_id = self._entry(behavior, 9, "主动消息目标", "ACTIVE_TARGET_ID", "")
         self.active_prompt = self._entry(behavior, 10, "主动消息提示", "ACTIVE_PROMPT", "")
         self.persona = self._entry(behavior, 11, "Persona 文件", "PERSONA_FILE", "")
-        self.emoji_catalog = self._entry(behavior, 13, "表情词典文件", "EMOJI_CATALOG", "", column=2)
+        self.emoji_catalog = self._entry(behavior, 13, "表情词典文件", "EMOJI_CATALOG", "")
         ttk.Button(
             behavior,
             text="编辑词典",
             command=self.edit_emoji_catalog,
-        ).grid(row=13, column=4, padx=(0, 4), pady=5, sticky="w")
+        ).grid(row=13, column=2, padx=(8, 4), pady=5, sticky="w")
         ttk.Button(
             behavior,
             text="选择",
@@ -1121,7 +1121,7 @@ class ControlPanel(tk.Tk):
     def _tool_selector(self, parent: ttk.Frame, row: int, column: int) -> None:
         """Render known safe tools as checkboxes and keep the env format stable."""
         holder = ttk.Frame(parent, style="Surface.TFrame")
-        holder.grid(row=row, column=column, columnspan=2, sticky="w", pady=4)
+        holder.grid(row=row, column=column, columnspan=4, sticky="ew", pady=4)
         ttk.Checkbutton(holder, text="启用白名单工具", variable=self.tools_enabled).pack(side="left")
         badge = HelpBadge(holder, self, HELP_TEXTS["TOOLS_ENABLED"])
         badge.pack(side="left", padx=(4, 10))
