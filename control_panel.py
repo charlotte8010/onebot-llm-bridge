@@ -522,10 +522,13 @@ class ServiceProcess:
     def start(self, env: dict[str, str]) -> None:
         if self.running():
             return
+        self.log.put(f"[{self.name}] 正在启动 {self.script.name}")
+        child_env = dict(env)
+        child_env["PYTHONUNBUFFERED"] = "1"
         self.process = subprocess.Popen(
-            [sys.executable, str(self.script)],
+            [sys.executable, "-u", str(self.script)],
             cwd=ROOT,
-            env=env,
+            env=child_env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
