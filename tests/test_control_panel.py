@@ -88,6 +88,10 @@ class ControlPanelHelperTests(unittest.TestCase):
         self.assertIn("NapCat WebUI", HELP_TEXTS["NAPCAT_EVENT_TOKEN"])
         self.assertIn("不在 NapCat", HELP_TEXTS["BOT_SERVICE_TOKEN"])
 
+    def test_allowlist_help_distinguishes_group_list_and_active_target(self):
+        self.assertIn("半角逗号", HELP_TEXTS["GROUP_ALLOWLIST"])
+        self.assertIn("不要填逗号列表", HELP_TEXTS["ACTIVE_TARGET_ID"])
+
     def test_generated_service_token_is_url_safe_and_nontrivial(self):
         first = generate_service_token()
         second = generate_service_token()
