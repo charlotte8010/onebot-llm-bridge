@@ -442,6 +442,14 @@ def build_napcat_nt_command(boot: str, qq: str, hook: str) -> list[str]:
     return [str(boot_exe), qq, hook]
 
 
+def build_napcat_utf8_console_command(command: list[str]) -> list[str]:
+    """Start a NapCat command in a UTF-8 Windows console so Chinese logs stay readable."""
+    if os.name != "nt":
+        return command
+    shell = os.environ.get("COMSPEC", "cmd.exe")
+    return [shell, "/d", "/c", "chcp 65001 > nul & " + subprocess.list2cmdline(command)]
+
+
 def discover_qq_executable(boot: str) -> Path | None:
     """Find QQNT without assuming that it shares a drive with NapCat."""
     candidates: list[Path] = []
@@ -2160,7 +2168,9 @@ class ControlPanel(tk.Tk):
             if discovered_qq and direct_boot.is_file() and direct_hook.is_file():
                 command_qq = str(discovered_qq)
                 command_hook = str(direct_hook)
-                command = build_napcat_nt_command(command_boot, command_qq, command_hook)
+                command = build_napcat_utf8_console_command(
+                    build_napcat_nt_command(command_boot, command_qq, command_hook)
+                )
                 main_path = (boot_path.parent / "napcat.mjs").resolve()
                 launch_env.update(
                     {

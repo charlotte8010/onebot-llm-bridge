@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from control_panel import HELP_SECTIONS, HELP_TEXTS, OPTION_LABELS, ControlPanel, build_napcat_command, build_napcat_nt_command, discover_qq_executable, generate_service_token, local_url_port, load_env_file, load_theme, parse_port, parse_model_ids, probe_models, save_env_file, save_theme, vision_status
+from control_panel import HELP_SECTIONS, HELP_TEXTS, OPTION_LABELS, ControlPanel, build_napcat_command, build_napcat_nt_command, build_napcat_utf8_console_command, discover_qq_executable, generate_service_token, local_url_port, load_env_file, load_theme, parse_port, parse_model_ids, probe_models, save_env_file, save_theme, vision_status
 
 
 class ControlPanelHelperTests(unittest.TestCase):
@@ -65,6 +65,11 @@ class ControlPanelHelperTests(unittest.TestCase):
                 "E:/Napcat/NapCat.Shell/NapCatWinBootHook.dll",
             ],
         )
+
+    def test_napcat_console_command_is_left_unchanged_off_windows(self):
+        command = ["NapCatWinBootMain.exe", "QQ.exe", "NapCatWinBootHook.dll"]
+        with patch("control_panel.os.name", "posix"):
+            self.assertEqual(build_napcat_utf8_console_command(command), command)
 
     def test_napcat_qq_discovery_uses_install_location_on_current_machine(self):
         if not Path("E:/QQNT/QQ.exe").is_file():
