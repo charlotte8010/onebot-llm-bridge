@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from control_panel import HELP_SECTIONS, HELP_TEXTS, OPTION_LABELS, ControlPanel, build_napcat_command, discover_qq_executable, local_url_port, load_env_file, load_theme, parse_port, parse_model_ids, probe_models, save_env_file, save_theme
+from control_panel import HELP_SECTIONS, HELP_TEXTS, OPTION_LABELS, ControlPanel, build_napcat_command, discover_qq_executable, generate_service_token, local_url_port, load_env_file, load_theme, parse_port, parse_model_ids, probe_models, save_env_file, save_theme
 
 
 class ControlPanelHelperTests(unittest.TestCase):
@@ -87,6 +87,12 @@ class ControlPanelHelperTests(unittest.TestCase):
     def test_token_help_explains_where_each_token_belongs(self):
         self.assertIn("NapCat WebUI", HELP_TEXTS["NAPCAT_EVENT_TOKEN"])
         self.assertIn("不在 NapCat", HELP_TEXTS["BOT_SERVICE_TOKEN"])
+
+    def test_generated_service_token_is_url_safe_and_nontrivial(self):
+        first = generate_service_token()
+        second = generate_service_token()
+        self.assertGreaterEqual(len(first), 40)
+        self.assertNotEqual(first, second)
 
     def test_probe_models_uses_bearer_key_and_counts_models(self):
         class Response:

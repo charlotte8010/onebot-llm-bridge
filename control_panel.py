@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import secrets
 import socket
 import subprocess
 import sys
@@ -77,7 +78,7 @@ HELP_TEXTS: dict[str, str] = {
     "NAPCAT_API_URL": "NapCat 的 HTTP Server 地址，通常是 http://127.0.0.1:3000。控制台和 Bridge 通过它发消息。",
     "NAPCAT_ACCESS_TOKEN": "NapCat HTTP Server 的访问 Token。它和“事件上报 Token”不是同一个东西。",
     "NAPCAT_EVENT_TOKEN": "去 NapCat WebUI → 网络配置 → OneBot11 → HTTP 上报服务（HTTP Client），打开上报到 8766/onebot 的配置，复制其中的 Token 到这里。它不是 3000 的 NapCat API Token，也不是 Bot 服务 Token。",
-    "BOT_SERVICE_TOKEN": "这个 Token 不在 NapCat 里。它由本项目的 Bot 服务（8765）和 Bridge 共用；可以在控制台这里自行填写一串随机字符串，保存后由两边共同读取 .env.local。",
+    "BOT_SERVICE_TOKEN": "这个 Token 不在 NapCat 里。它由本项目的 Bot 服务（8765）和 Bridge 共用；可以手动填写或点击“生成”。生成后还要保存配置并重启 Bot 与 Bridge。",
     "BRIDGE_PORT": "Bridge 接收 NapCat 事件的端口，默认 8766。",
     "BOT_SERVICE_PORT": "Bot 服务提供模型回复的端口，默认 8765。",
     "NAPCAT_BOOT": "NapCat 启动程序路径。填写 launcher.bat 时只启动 launcher，由它自己查找 QQ；只有直接填写 NapCatWinBootMain.exe 时才需要 QQ 和 Hook。",
@@ -392,6 +393,11 @@ def discover_qq_executable(boot: str) -> Path | None:
         if candidate.is_file():
             return candidate
     return None
+
+
+def generate_service_token() -> str:
+    """Generate a URL-safe token for the local Bot service and Bridge."""
+    return secrets.token_urlsafe(32)
 
 
 class ServiceProcess:
@@ -1010,6 +1016,7 @@ class ControlPanel(tk.Tk):
         self.napcat_access = self._entry(network, 1, "NapCat Access Token", "NAPCAT_ACCESS_TOKEN", secret=True)
         self.event_token = self._entry(network, 2, "HTTP Client Token（事件上报）", "NAPCAT_EVENT_TOKEN", secret=True)
         self.service_token = self._entry(network, 3, "Bot 服务 Token", "BOT_SERVICE_TOKEN", secret=True)
+        ttk.Button(network, text="生成", command=self.generate_bot_token).grid(row=3, column=2, padx=(8, 0), pady=4)
         self.bridge_port = self._entry(network, 4, "Bridge 端口", "BRIDGE_PORT", "8766")
         self.bot_port = self._entry(network, 5, "Bot 端口", "BOT_SERVICE_PORT", "8765")
         self.napcat_boot = self._entry(network, 6, "NapCat 启动程序", "NAPCAT_BOOT")
@@ -1586,6 +1593,16 @@ class ControlPanel(tk.Tk):
         selected = filedialog.askopenfilename(parent=self, title=title)
         if selected:
             variable.set(selected)
+
+    def generate_bot_token(self) -> None:
+        if self.service_token.get().strip() and not messagebox.askyesno(
+            "生成 Bot 服务 Token",
+            "生成新的 Token 会让当前运行中的 Bot 和 Bridge 失去认证。\n生成后请保存配置并重启它们。\n\n确定要替换吗？",
+            parent=self,
+        ):
+            return
+        self.service_token.set(generate_service_token())
+        self._append_log("已生成新的 Bot 服务 Token；请保存配置后重启 Bot 和 Bridge")
 
     def _select_napcat_boot(self) -> None:
         selected = filedialog.askopenfilename(parent=self, title="选择 NapCat 启动程序")
