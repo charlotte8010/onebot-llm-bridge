@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from control_panel import HELP_SECTIONS, HELP_TEXTS, OPTION_LABELS, ControlPanel, build_napcat_command, discover_qq_executable, generate_service_token, local_url_port, load_env_file, load_theme, parse_port, parse_model_ids, probe_models, save_env_file, save_theme
+from control_panel import HELP_SECTIONS, HELP_TEXTS, OPTION_LABELS, ControlPanel, build_napcat_command, discover_qq_executable, generate_service_token, local_url_port, load_env_file, load_theme, parse_port, parse_model_ids, probe_models, save_env_file, save_theme, vision_status
 
 
 class ControlPanelHelperTests(unittest.TestCase):
@@ -78,6 +78,11 @@ class ControlPanelHelperTests(unittest.TestCase):
         self.assertEqual(OPTION_LABELS["DECISION_MODE"]["heuristic"], "本地规则")
         self.assertEqual(OPTION_LABELS["VISION_MODE"]["separate"], "单独视觉模型")
         self.assertEqual(OPTION_LABELS["GROUP_MODE"]["mention"], "叫到才回")
+
+    def test_vision_status_explains_direct_mode_as_main_model(self):
+        self.assertEqual(vision_status("direct", ""), ("识图 · 交给主模型", True))
+        self.assertEqual(vision_status("separate", ""), ("识图 · 单独视觉模型 / 未配置", False))
+        self.assertEqual(vision_status("separate", "vision-model"), ("识图 · 单独视觉模型 / vision-model", True))
 
     def test_help_sections_cover_first_run_and_supabase(self):
         titles = {title for title, _content in HELP_SECTIONS}

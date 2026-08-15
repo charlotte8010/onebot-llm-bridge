@@ -30,6 +30,17 @@ DEFAULT_NAPCAT_API_URL = "http://127.0.0.1:3000"
 DEFAULT_WINDOW_GEOMETRY = "1040x860"
 
 
+def vision_status(mode: str, model: str) -> tuple[str, bool]:
+    """Return a user-facing vision status and whether its configuration is ready."""
+    normalized_mode = mode.strip().lower()
+    if normalized_mode == "off":
+        return "识图 · 已关闭", True
+    if normalized_mode == "direct":
+        return "识图 · 交给主模型", True
+    model_name = model.strip()
+    return f"识图 · 单独视觉模型 / {model_name or '未配置'}", bool(model_name)
+
+
 # The UI shows readable Chinese labels while the values written to .env.local
 # stay stable for the runtime and existing installations.
 OPTION_LABELS: dict[str, dict[str, str]] = {
@@ -2054,9 +2065,9 @@ class ControlPanel(tk.Tk):
             text="Bridge · 运行中" if bridge_running else ("Bridge · 端口无效" if bridge_port is None else "Bridge · 未运行"),
             style="StatusOnline.TLabel" if bridge_running else "StatusOffline.TLabel",
         )
-        vision_ready = vision_mode == "off" or bool(vision_model.strip())
+        vision_text, vision_ready = vision_status(vision_mode, vision_model)
         self.vision_status.configure(
-            text=f"识图 · {vision_mode} / {vision_model or '未配置'}",
+            text=vision_text,
             style="StatusOnline.TLabel" if vision_ready else "StatusInfo.TLabel",
         )
         if not napcat_url:
