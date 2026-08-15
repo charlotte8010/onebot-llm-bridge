@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import re
@@ -76,6 +77,22 @@ def _bearer_matches(header: str, expected: str) -> bool:
     return hmac.compare_digest(header.strip(), f"Bearer {expected}")
 
 
+def _napcat_signature(token: str, body: bytes) -> str:
+    return hmac.new(token.encode("utf-8"), body, hashlib.sha1).hexdigest()
+
+
+def _event_auth_matches(authorization: str, signature: str, expected: str, body: bytes) -> bool:
+    """Accept both OneBot Bearer tokens and NapCat HTTP Client HMAC signatures."""
+    if not expected:
+        return True
+    if _bearer_matches(authorization, expected):
+        return True
+    scheme, separator, value = signature.strip().partition("=")
+    if scheme.lower() != "sha1" or not separator:
+        return False
+    return hmac.compare_digest(value.lower(), _napcat_signature(expected, body))
+
+
 def _json_bytes(payload: Mapping[str, Any]) -> bytes:
     return json.dumps(dict(payload), ensure_ascii=False).encode("utf-8")
 
@@ -94,7 +111,7 @@ class JsonHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def read_json(self) -> dict[str, Any]:
+    def read_body(self) -> bytes:
         raw_length = self.headers.get("Content-Length")
         try:
             length = int(raw_length or "0")
@@ -102,11 +119,17 @@ class JsonHandler(BaseHTTPRequestHandler):
             raise ValueError("invalid Content-Length") from exc
         if length < 0 or length > MAX_BODY_BYTES:
             raise ValueError("request body is too large")
-        body = self.rfile.read(length)
+        return self.rfile.read(length)
+
+    @staticmethod
+    def parse_json_body(body: bytes) -> dict[str, Any]:
         data = json.loads(body.decode("utf-8"))
         if not isinstance(data, dict):
             raise ValueError("JSON body must be an object")
         return data
+
+    def read_json(self) -> dict[str, Any]:
+        return self.parse_json_body(self.read_body())
 
 
 class BotService:
@@ -971,19 +994,26 @@ class BridgeHandler(JsonHandler):
             self.write_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not_found"})
             return
         server: BridgeHTTPServer = self.server  # type: ignore[assignment]
+        try:
+            body = self.read_body()
+        except ValueError as exc:
+            self.write_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
         authorization = self.headers.get("Authorization", "")
-        if not _bearer_matches(authorization, server.event_token):
-            scheme, separator, value = authorization.strip().partition(" ")
+        signature = self.headers.get("x-signature", "")
+        if not _event_auth_matches(authorization, signature, server.event_token, body):
+            auth_scheme, auth_separator, auth_value = authorization.strip().partition(" ")
             print(
                 "[bridge] event auth rejected: "
-                f"scheme={scheme or '<none>'}, "
-                f"received_length={len(value) if separator else 0}, "
+                f"authorization_scheme={auth_scheme or '<none>'}, "
+                f"authorization_length={len(auth_value) if auth_separator else 0}, "
+                f"signature_length={len(signature.strip())}, "
                 f"expected_length={len(server.event_token)}"
             )
             self.write_json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "unauthorized"})
             return
         try:
-            result = server.bridge.enqueue_event(self.read_json())
+            result = server.bridge.enqueue_event(self.parse_json_body(body))
         except (EventError, ValueError) as exc:
             self.write_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
             return

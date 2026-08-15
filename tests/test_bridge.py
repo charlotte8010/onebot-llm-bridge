@@ -1,11 +1,13 @@
-import threading
+import hashlib
+import hmac
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
 
 from onebot_llm_bridge.config import Settings
-from onebot_llm_bridge.services import Bridge, _related_topic
+from onebot_llm_bridge.services import Bridge, _event_auth_matches, _related_topic
 
 
 class FakeNapCat:
@@ -41,6 +43,20 @@ class FakeImageResolver:
 
 
 class BridgeTests(unittest.TestCase):
+    def test_event_auth_accepts_napcat_hmac_signature(self):
+        body = b'{"post_type":"message"}'
+        token = "event-token"
+        digest = hmac.new(token.encode("utf-8"), body, hashlib.sha1).hexdigest()
+        self.assertTrue(_event_auth_matches("", f"sha1={digest}", token, body))
+
+    def test_event_auth_rejects_invalid_napcat_signature(self):
+        body = b'{"post_type":"message"}'
+        self.assertFalse(_event_auth_matches("", "sha1=bad", "event-token", body))
+
+    def test_event_auth_keeps_bearer_compatibility(self):
+        body = b"{}"
+        self.assertTrue(_event_auth_matches("Bearer event-token", "", "event-token", body))
+
     def settings(self):
         return Settings.from_values(
             {
