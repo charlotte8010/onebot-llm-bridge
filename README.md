@@ -256,14 +256,16 @@ Reaction 是对已有消息添加回应，不是额外发送一条表情消息�
 ### 定时主动消息
 
 ```dotenv
-ACTIVE_ENABLED=true
 ACTIVE_INTERVAL_MINUTES=60
-ACTIVE_TARGET_TYPE=private
-ACTIVE_TARGET_ID=你的 QQ 号
-ACTIVE_PROMPT=生成一条自然的主动消息
+ACTIVE_PRIVATE_ENABLED=true
+ACTIVE_PRIVATE_TARGET_ID=你的 QQ 号
+ACTIVE_PRIVATE_PROMPT=生成一条自然的私聊主动消息
+ACTIVE_GROUP_ENABLED=false
+ACTIVE_GROUP_TARGET_ID=你的群号
+ACTIVE_GROUP_PROMPT=生成一条自然的群聊主动消息
 ```
 
-建议先用私聊测试，并设置较长间隔。
+私聊和群聊可以分别启用，使用同一个间隔。建议先只启用私聊测试，并设置较长间隔。
 
 ### 工具白名单
 

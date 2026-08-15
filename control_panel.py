@@ -68,11 +68,17 @@ HELP_TEXTS: dict[str, str] = {
     "REACTION_MODE": "点赞回应只是在已有消息上加 reaction，不会额外发送一条表情消息。",
     "PERSONA_FILE": "稳定的人设提示词文件。建议把长期不变的人设、说话方式和明确禁忌放在这里。",
     "EMOJI_CATALOG": "表情词典路径。可以点击“编辑词典”，让模型知道“笑死”“无语”等词对应哪个 NapCat 表情 ID。",
-    "ACTIVE_ENABLED": "启用后会按间隔主动给目标发消息。建议先用私聊测试，并设置较长间隔。",
+    "ACTIVE_ENABLED": "旧版单目标主动消息开关。新版请分别使用“启用私聊主动消息”和“启用群聊主动消息”。",
     "ACTIVE_INTERVAL_MINUTES": "每隔多少分钟触发一次主动消息任务。建议先设置 60 分钟或更长，避免消息过于频繁。",
-    "ACTIVE_TARGET_TYPE": "主动消息发往哪里：私聊填写 QQ 号，群聊填写群号。",
-    "ACTIVE_TARGET_ID": "主动消息目前只支持一个目标：私聊填对方 QQ 号，群聊填群号。只能填写数字，不要填逗号列表；项目目前没有单独的主动消息白名单。",
-    "ACTIVE_PROMPT": "给模型的任务说明，不是固定发送的原文。例如：根据最近聊天，自然地发一句问候；模型会按 Persona 生成最终气泡。",
+    "ACTIVE_TARGET_TYPE": "旧版单目标主动消息类型。新版在私聊和群聊两行分别配置。",
+    "ACTIVE_TARGET_ID": "旧版单目标主动消息 ID。新版请分别填写私聊目标和群聊目标。",
+    "ACTIVE_PROMPT": "旧版单目标主动消息提示。新版请分别填写私聊提示和群聊提示。",
+    "ACTIVE_PRIVATE_ENABLED": "是否按间隔主动给私聊目标发消息。关闭后不会向私聊发送主动消息。",
+    "ACTIVE_PRIVATE_TARGET_ID": "私聊主动消息的接收者 QQ 号，只填写数字。",
+    "ACTIVE_PRIVATE_PROMPT": "给私聊主动消息使用的任务要求，不是固定原文；模型会结合 Persona 生成最终气泡。",
+    "ACTIVE_GROUP_ENABLED": "是否按间隔主动给群聊目标发消息。关闭后不会向群聊发送主动消息。",
+    "ACTIVE_GROUP_TARGET_ID": "群聊主动消息的接收群号，只填写数字。",
+    "ACTIVE_GROUP_PROMPT": "给群聊主动消息使用的任务要求，不是固定原文；模型会结合 Persona 生成最终气泡。",
     "TOOLS_ENABLED": "只允许工具白名单里的工具被模型调用。不了解工具用途时建议关闭。",
     "TOOL_ALLOWLIST": "勾选后，模型才可以请求对应工具；没有勾选的工具即使被模型请求也不会执行。",
     "NAPCAT_API_URL": "NapCat 的 HTTP Server 地址，通常是 http://127.0.0.1:3000。控制台和 Bridge 通过它发消息。",
@@ -166,14 +172,14 @@ Bot 服务 Token 不在 NapCat 里。它是本项目内部 8765 端口的共享�
     ),
     (
         "主动消息",
-        """主动消息用于让 Bot 按间隔主动联系一个私聊或群聊目标。
+        """主动消息现在分成两行，私聊和群聊可以分别启用、填写目标和提示。
 
-• 类型：选择私聊或群聊。
-• 目标：私聊填写 QQ 号，群聊填写群号。
-• 间隔：例如 60，表示大约每 60 分钟触发一次。
-• 提示：这是给模型的生成要求，不是直接发送的固定句子。例如“根据最近聊天，自然地问候一下对方”。
+• 间隔：两种主动消息共用这个间隔，例如 60 表示大约每 60 分钟触发一次。
+• 私聊：勾选“启用私聊主动消息”，填写 QQ 号和私聊提示。
+• 群聊：勾选“启用群聊主动消息”，填写群号和群聊提示。
+• 提示：这是给模型的生成要求，不是直接发送的固定句子；例如“根据最近聊天，自然地问候一下对方”。
 
-需要同时勾选“启用定时主动消息”，填写完整目标和提示，并保存配置后手动重启服务。建议先用自己的私聊测试。""",
+每一行都可以单独关闭。填写完整目标和提示后保存配置，再手动重启服务。建议先只启用私聊测试。""",
     ),
     (
         "常见故障",
@@ -716,6 +722,13 @@ class ControlPanel(tk.Tk):
     def _value(self, key: str, default: str = "") -> str:
         return self.values.get(key, os.environ.get(key, default)).strip()
 
+    def _active_value(self, key: str, legacy_key: str, target_type: str, default: str = "") -> str:
+        if key in self.values or key in os.environ:
+            return self._value(key, default)
+        if self._value("ACTIVE_TARGET_TYPE", "private").lower() == target_type:
+            return self._value(legacy_key, default)
+        return default
+
     def toggle_theme(self) -> None:
         self.theme_name = "dark" if self.theme_name == "morandi" else "morandi"
         self.COLORS = dict(self.THEMES[self.theme_name])
@@ -976,21 +989,46 @@ class ControlPanel(tk.Tk):
         self.reaction_mode = self._combo(behavior, 6, 2, "表情回应", "REACTION_MODE", ("off", "like"), "off")
         self.typing = tk.BooleanVar(value=self._value("TYPING_STATUS", "true").lower() in {"1", "true", "yes", "on"})
         self._checkbutton(behavior, 6, 0, "显示输入状态", self.typing)
-        self.active_enabled = tk.BooleanVar(value=self._value("ACTIVE_ENABLED", "false").lower() in {"1", "true", "yes", "on"})
-        self._checkbutton(behavior, 7, 0, "启用定时主动消息", self.active_enabled, "ACTIVE_ENABLED")
         self.tools_enabled = tk.BooleanVar(value=self._value("TOOLS_ENABLED", "false").lower() in {"1", "true", "yes", "on"})
         self._tool_selector(behavior, 7, 2)
         self.active_interval = self._entry(behavior, 8, "主动消息间隔(分钟)", "ACTIVE_INTERVAL_MINUTES", "60")
-        self.active_target_type = self._combo(behavior, 8, 2, "主动消息类型", "ACTIVE_TARGET_TYPE", ("private", "group"), "private")
-        self.active_target_id = self._entry(behavior, 9, "主动消息目标", "ACTIVE_TARGET_ID", "", input_columnspan=5)
-        self.active_prompt = self._entry(behavior, 10, "主动消息提示", "ACTIVE_PROMPT", "", input_columnspan=5)
-        self.persona = self._entry(behavior, 11, "Persona 文件", "PERSONA_FILE", "", input_columnspan=3)
-        self.emoji_catalog = self._entry(behavior, 13, "表情词典文件", "EMOJI_CATALOG", "", input_columnspan=3)
+        self.active_private_enabled = tk.BooleanVar(
+            value=self._active_value("ACTIVE_PRIVATE_ENABLED", "ACTIVE_ENABLED", "private", "false").lower()
+            in {"1", "true", "yes", "on"}
+        )
+        self._checkbutton(behavior, 9, 0, "启用私聊主动消息", self.active_private_enabled, "ACTIVE_PRIVATE_ENABLED")
+        self.active_private_target_id = self._entry(
+            behavior, 9, "私聊目标 QQ", "ACTIVE_PRIVATE_TARGET_ID",
+            self._active_value("ACTIVE_PRIVATE_TARGET_ID", "ACTIVE_TARGET_ID", "private"),
+            column=2, input_columnspan=3,
+        )
+        self.active_private_prompt = self._entry(
+            behavior, 10, "私聊主动提示", "ACTIVE_PRIVATE_PROMPT",
+            self._active_value("ACTIVE_PRIVATE_PROMPT", "ACTIVE_PROMPT", "private"),
+            input_columnspan=5,
+        )
+        self.active_group_enabled = tk.BooleanVar(
+            value=self._active_value("ACTIVE_GROUP_ENABLED", "ACTIVE_ENABLED", "group", "false").lower()
+            in {"1", "true", "yes", "on"}
+        )
+        self._checkbutton(behavior, 11, 0, "启用群聊主动消息", self.active_group_enabled, "ACTIVE_GROUP_ENABLED")
+        self.active_group_target_id = self._entry(
+            behavior, 11, "群聊目标群号", "ACTIVE_GROUP_TARGET_ID",
+            self._active_value("ACTIVE_GROUP_TARGET_ID", "ACTIVE_TARGET_ID", "group"),
+            column=2, input_columnspan=3,
+        )
+        self.active_group_prompt = self._entry(
+            behavior, 12, "群聊主动提示", "ACTIVE_GROUP_PROMPT",
+            self._active_value("ACTIVE_GROUP_PROMPT", "ACTIVE_PROMPT", "group"),
+            input_columnspan=5,
+        )
+        self.persona = self._entry(behavior, 13, "Persona 文件", "PERSONA_FILE", "", input_columnspan=3)
+        self.emoji_catalog = self._entry(behavior, 15, "表情词典文件", "EMOJI_CATALOG", "", input_columnspan=3)
         ttk.Button(
             behavior,
             text="编辑词典",
             command=self.edit_emoji_catalog,
-        ).grid(row=13, column=4, padx=(8, 4), pady=5, sticky="w")
+        ).grid(row=15, column=4, padx=(8, 4), pady=5, sticky="w")
         ttk.Button(
             behavior,
             text="选择",
@@ -1000,12 +1038,12 @@ class ControlPanel(tk.Tk):
             behavior,
             text="选择",
             command=lambda: self._select_path(self.persona, "选择 Persona 文件"),
-        ).grid(row=11, column=4, padx=(0, 4), pady=5, sticky="w")
+        ).grid(row=13, column=4, padx=(0, 4), pady=5, sticky="w")
         ttk.Button(
             behavior,
             text="编辑 Persona",
             command=self.edit_persona,
-        ).grid(row=11, column=5, padx=(0, 4), pady=5, sticky="w")
+        ).grid(row=13, column=5, padx=(0, 4), pady=5, sticky="w")
 
         self.settings = network_content
         network = ttk.LabelFrame(self.settings, text="服务与 Token", padding=14, style="Section.TLabelframe")
@@ -1401,9 +1439,14 @@ class ControlPanel(tk.Tk):
             "VISION_MODEL": self.vision_model.get().strip(), "VISION_MAX_TOKENS": self.vision_max_tokens.get().strip(), "VISION_TIMEOUT_SECONDS": self.vision_timeout.get().strip(),
             "GROUP_MODE": self.group_mode.get().strip(), "DECISION_MODE": self.decision_mode.get().strip(), "GROUP_ALLOWLIST": self.group_allowlist.get().strip(), "BOT_QQ": self.bot_qq.get().strip(), "BOT_NAMES": self.bot_names.get().strip(),
             "DEBOUNCE_SECONDS": self.debounce.get().strip(), "FOLLOWUP_SECONDS": self.followup.get().strip(), "CONTEXT_MESSAGES": self.context_messages.get().strip(), "MEMORY_DB": self.memory_db.get().strip(),
-            "REACTION_MODE": self.reaction_mode.get().strip(), "ACTIVE_ENABLED": "true" if self.active_enabled.get() else "false",
-            "ACTIVE_INTERVAL_MINUTES": self.active_interval.get().strip(), "ACTIVE_TARGET_TYPE": self.active_target_type.get().strip(),
-            "ACTIVE_TARGET_ID": self.active_target_id.get().strip(), "ACTIVE_PROMPT": self.active_prompt.get().strip(),
+            "REACTION_MODE": self.reaction_mode.get().strip(),
+            "ACTIVE_INTERVAL_MINUTES": self.active_interval.get().strip(),
+            "ACTIVE_PRIVATE_ENABLED": "true" if self.active_private_enabled.get() else "false",
+            "ACTIVE_PRIVATE_TARGET_ID": self.active_private_target_id.get().strip(),
+            "ACTIVE_PRIVATE_PROMPT": self.active_private_prompt.get().strip(),
+            "ACTIVE_GROUP_ENABLED": "true" if self.active_group_enabled.get() else "false",
+            "ACTIVE_GROUP_TARGET_ID": self.active_group_target_id.get().strip(),
+            "ACTIVE_GROUP_PROMPT": self.active_group_prompt.get().strip(),
             "TOOLS_ENABLED": "true" if self.tools_enabled.get() else "false", "TOOL_ALLOWLIST": self.tool_allowlist.get().strip(),
             "EMOJI_CATALOG": self.emoji_catalog.get().strip(),
             "TYPING_STATUS": "true" if self.typing.get() else "false", "PERSONA_FILE": self.persona.get().strip(),

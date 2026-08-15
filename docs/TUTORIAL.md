@@ -158,11 +158,13 @@ DEBOUNCE_SECONDS=random
 FOLLOWUP_SECONDS=120
 TYPING_STATUS=true
 REACTION_MODE=off
-ACTIVE_ENABLED=false
 ACTIVE_INTERVAL_MINUTES=60
-ACTIVE_TARGET_TYPE=private
-ACTIVE_TARGET_ID=
-ACTIVE_PROMPT=
+ACTIVE_PRIVATE_ENABLED=false
+ACTIVE_PRIVATE_TARGET_ID=
+ACTIVE_PRIVATE_PROMPT=
+ACTIVE_GROUP_ENABLED=false
+ACTIVE_GROUP_TARGET_ID=
+ACTIVE_GROUP_PROMPT=
 TOOLS_ENABLED=false
 TOOL_ALLOWLIST=get_time
 ```
@@ -183,14 +185,16 @@ BOT_NAMES=bot,助手,你的机器人昵称
 
 `REACTION_MODE=like` 允许模型使用 `[[REACTION:emoji_id]]` 对收到的消息发送 QQ 表情回应；默认关闭。
 推荐同时设置 `EMOJI_CATALOG=./examples/emoji_catalog.example.json`。词典中为每个表情填写名称、含义、使用场景和 NapCat 数字 ID，模型只选择名称，程序负责转换成 ID，避免模型瞎猜数字。
-主动消息也默认关闭。开启时必须填写目标 QQ/群号和提示词，例如：
+主动消息也默认关闭。私聊和群聊可以分别开启，二者共用主动消息间隔。例如：
 
 ```dotenv
-ACTIVE_ENABLED=true
 ACTIVE_INTERVAL_MINUTES=120
-ACTIVE_TARGET_TYPE=private
-ACTIVE_TARGET_ID=你的QQ号
-ACTIVE_PROMPT=想一句自然的近况，发一条简短消息
+ACTIVE_PRIVATE_ENABLED=true
+ACTIVE_PRIVATE_TARGET_ID=你的QQ号
+ACTIVE_PRIVATE_PROMPT=想一句自然的近况，发一条简短私聊消息
+ACTIVE_GROUP_ENABLED=true
+ACTIVE_GROUP_TARGET_ID=你的群号
+ACTIVE_GROUP_PROMPT=想一句适合群里的自然近况
 ```
 
 主动消息由 Bridge 定时调用模型并通过 NapCat 发送，关闭控制台或 Bridge 后定时器会停止。

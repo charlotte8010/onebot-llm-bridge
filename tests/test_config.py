@@ -104,6 +104,24 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(settings.active_enabled)
         self.assertEqual(settings.active_interval_minutes, 15.0)
 
+    def test_private_and_group_active_messages_are_independent(self) -> None:
+        settings = Settings.from_values(
+            {
+                "ACTIVE_INTERVAL_MINUTES": "15",
+                "ACTIVE_PRIVATE_ENABLED": "true",
+                "ACTIVE_PRIVATE_TARGET_ID": "100",
+                "ACTIVE_PRIVATE_PROMPT": "私聊近况",
+                "ACTIVE_GROUP_ENABLED": "true",
+                "ACTIVE_GROUP_TARGET_ID": "999",
+                "ACTIVE_GROUP_PROMPT": "群聊近况",
+            }
+        )
+        settings.validate_for_bridge()
+        self.assertTrue(settings.active_private_enabled)
+        self.assertTrue(settings.active_group_enabled)
+        self.assertEqual(settings.active_private_target_id, "100")
+        self.assertEqual(settings.active_group_target_id, "999")
+
     def test_active_messages_require_target_and_prompt(self) -> None:
         settings = Settings.from_values({"ACTIVE_ENABLED": "true"})
         with self.assertRaises(ConfigError):

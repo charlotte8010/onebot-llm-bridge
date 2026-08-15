@@ -90,7 +90,7 @@ class ControlPanelHelperTests(unittest.TestCase):
 
     def test_allowlist_help_distinguishes_group_list_and_active_target(self):
         self.assertIn("半角逗号", HELP_TEXTS["GROUP_ALLOWLIST"])
-        self.assertIn("不要填逗号列表", HELP_TEXTS["ACTIVE_TARGET_ID"])
+        self.assertIn("只填写数字", HELP_TEXTS["ACTIVE_PRIVATE_TARGET_ID"])
 
     def test_generated_service_token_is_url_safe_and_nontrivial(self):
         first = generate_service_token()

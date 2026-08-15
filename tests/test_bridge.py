@@ -71,6 +71,34 @@ class BridgeTests(unittest.TestCase):
         self.assertTrue(result["handled"])
         self.assertEqual(napcat.sent, [("private", "123", "第一句"), ("private", "123", "第二句")])
 
+    def test_active_messages_can_send_to_private_and_group_targets(self):
+        settings = Settings.from_values(
+            {
+                "LLM_API_KEY": "key",
+                "LLM_BASE_URL": "https://example.test/v1",
+                "LLM_MODEL": "chat",
+                "ACTIVE_INTERVAL_MINUTES": "1",
+                "ACTIVE_PRIVATE_ENABLED": "true",
+                "ACTIVE_PRIVATE_TARGET_ID": "100",
+                "ACTIVE_PRIVATE_PROMPT": "私聊提示",
+                "ACTIVE_GROUP_ENABLED": "true",
+                "ACTIVE_GROUP_TARGET_ID": "999",
+                "ACTIVE_GROUP_PROMPT": "群聊提示",
+            }
+        )
+        napcat = FakeNapCat()
+        calls = []
+        bridge = Bridge(
+            settings,
+            napcat=napcat,
+            bot_request=lambda payload: calls.append(payload) or {"bubbles": ["主动消息"]},
+        )
+        bridge._active_message_tick("private")
+        bridge._active_message_tick("group")
+        bridge.shutdown()
+        self.assertEqual(napcat.sent, [("private", "100", "主动消息"), ("group", "999", "主动消息")])
+        self.assertEqual([call["conversation"] for call in calls], ["private:100", "group:999"])
+
     def test_unaddressed_group_is_ignored(self):
         napcat = FakeNapCat()
         bridge = Bridge(self.settings(), napcat=napcat, bot_request=lambda payload: {"bubbles": ["no"]})

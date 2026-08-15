@@ -391,9 +391,10 @@ kept behind configuration switches so the default path remains predictable.
   `[[REACTION:emoji_id]]`, which is translated into NapCat's
   `set_msg_emoji_like` action. The marker is removed before text bubbles are
   sent.
-- `ACTIVE_ENABLED=true` starts one daemon timer for a configured private or
-  group target. The timer is cancelled by `Bridge.shutdown()` and never runs
-  arbitrary code.
+- `ACTIVE_PRIVATE_ENABLED=true` and `ACTIVE_GROUP_ENABLED=true` independently
+  start daemon timers for their configured private and group targets. Both use
+  `ACTIVE_INTERVAL_MINUTES`; timers are cancelled by `Bridge.shutdown()` and
+  never run arbitrary code.
 - `TOOLS_ENABLED=true` still requires every tool name to appear in
   `TOOL_ALLOWLIST`. Tool requests have no arguments and are resolved in one
   bounded round; arbitrary shell, filesystem, and network execution are not

@@ -450,7 +450,7 @@ class Bridge:
         self._topic_until: dict[str, float] = {}
         self._topic_text: dict[str, str] = {}
         self._loaded_contexts: set[str] = set()
-        self._active_timer: threading.Timer | None = None
+        self._active_timers: dict[str, threading.Timer] = {}
         self._summary_timers: dict[str, threading.Timer] = {}
         self._remote_groups = frozenset()
         self._remote_groups_checked_at = 0.0
@@ -472,8 +472,8 @@ class Bridge:
         )
         self._worker_id = f"bridge-{uuid.uuid4().hex}"
         self._shutdown = False
-        if settings.active_enabled and settings.active_target_id and settings.active_prompt:
-            self._schedule_active_message()
+        for target_type in self._active_target_types():
+            self._schedule_active_message(target_type)
 
     def _context_for(self, key: str) -> deque[NormalizedMessage]:
         context = self._contexts[key]
@@ -803,22 +803,49 @@ class Bridge:
             self.napcat.send_group(message.conversation_id, acknowledgement)
         return {"handled": True, "reason": "memory_updated"}
 
-    def _schedule_active_message(self) -> None:
-        if self._active_timer is not None:
-            self._active_timer.cancel()
-        self._active_timer = threading.Timer(
+    def _active_target_types(self) -> tuple[str, ...]:
+        target_types: list[str] = []
+        if self.settings.active_private_enabled:
+            target_types.append("private")
+        if self.settings.active_group_enabled:
+            target_types.append("group")
+        return tuple(target_types)
+
+    def _active_target_config(self, target_type: str) -> tuple[bool, str, str]:
+        if target_type == "group":
+            return (
+                self.settings.active_group_enabled,
+                self.settings.active_group_target_id,
+                self.settings.active_group_prompt,
+            )
+        return (
+            self.settings.active_private_enabled,
+            self.settings.active_private_target_id,
+            self.settings.active_private_prompt,
+        )
+
+    def _schedule_active_message(self, target_type: str) -> None:
+        previous = self._active_timers.get(target_type)
+        if previous is not None:
+            previous.cancel()
+        timer = threading.Timer(
             self.settings.active_interval_minutes * 60.0,
             self._active_message_tick,
+            args=(target_type,),
         )
-        self._active_timer.daemon = True
-        self._active_timer.start()
+        timer.daemon = True
+        self._active_timers[target_type] = timer
+        timer.start()
 
-    def _active_message_tick(self) -> None:
+    def _active_message_tick(self, target_type: str) -> None:
+        enabled, target_id, prompt = self._active_target_config(target_type)
+        if not enabled or not target_id or not prompt:
+            return
         try:
             payload = {
-                "message": self.settings.active_prompt,
+                "message": prompt,
                 "context": [],
-                "conversation": f"{self.settings.active_target_type}:{self.settings.active_target_id}",
+                "conversation": f"{target_type}:{target_id}",
                 "images": [],
                 "facts": [],
             }
@@ -829,15 +856,15 @@ class Bridge:
             for bubble in (str(item).strip() for item in bubbles):
                 if not bubble:
                     continue
-                if self.settings.active_target_type == "group":
-                    self.napcat.send_group(self.settings.active_target_id, bubble)
+                if target_type == "group":
+                    self.napcat.send_group(target_id, bubble)
                 else:
-                    self.napcat.send_private(self.settings.active_target_id, bubble)
+                    self.napcat.send_private(target_id, bubble)
         except Exception as exc:
             print(f"active message failed: {type(exc).__name__}: {exc}")
         finally:
-            if self.settings.active_enabled and not self._shutdown:
-                self._schedule_active_message()
+            if enabled and not self._shutdown:
+                self._schedule_active_message(target_type)
 
     def handle_event(self, event: Mapping[str, Any]) -> dict[str, Any]:
         message = NormalizedMessage.from_onebot(event)
@@ -916,8 +943,9 @@ class Bridge:
         for batch in batches:
             if batch.timer is not None:
                 batch.timer.cancel()
-        if self._active_timer is not None:
-            self._active_timer.cancel()
+        for timer in self._active_timers.values():
+            timer.cancel()
+        self._active_timers.clear()
         for timer in self._summary_timers.values():
             timer.cancel()
         self._summary_timers.clear()

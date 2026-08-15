@@ -59,6 +59,11 @@ def _text(values: Mapping[str, str], key: str, default: str = "") -> str:
     return str(values.get(key, default)).strip()
 
 
+def _enabled(values: Mapping[str, str], key: str, default: bool = False) -> bool:
+    fallback = "true" if default else "false"
+    return _text(values, key, fallback).lower() in {"1", "true", "yes", "on"}
+
+
 def _int(values: Mapping[str, str], key: str, default: int, minimum: int, maximum: int) -> int:
     raw = _text(values, key, str(default))
     try:
@@ -117,6 +122,12 @@ class Settings:
     active_target_type: str = "private"
     active_target_id: str = ""
     active_prompt: str = ""
+    active_private_enabled: bool = False
+    active_private_target_id: str = ""
+    active_private_prompt: str = ""
+    active_group_enabled: bool = False
+    active_group_target_id: str = ""
+    active_group_prompt: str = ""
     tools_enabled: bool = False
     tool_allowlist: tuple[str, ...] = ()
     typing_status: bool = True
@@ -142,8 +153,8 @@ class Settings:
         reaction_mode = _text(values, "REACTION_MODE", "off").lower()
         if reaction_mode not in {"off", "like"}:
             raise ConfigError("REACTION_MODE must be off or like")
-        active_target_type = _text(values, "ACTIVE_TARGET_TYPE", "private").lower()
-        if active_target_type not in {"private", "group"}:
+        legacy_target_type = _text(values, "ACTIVE_TARGET_TYPE", "private").lower()
+        if legacy_target_type not in {"private", "group"}:
             raise ConfigError("ACTIVE_TARGET_TYPE must be private or group")
         remote_memory_mode = _text(values, "REMOTE_MEMORY_MODE", "local_first").lower()
         if remote_memory_mode not in {"local_first", "coordinated"}:
@@ -179,6 +190,32 @@ class Settings:
         supabase_key = _text(values, "SUPABASE_SECRET_KEY") or _text(values, "SUPABASE_KEY")
         vision_api_key = _text(values, "VISION_API_KEY") or llm_api_key
         vision_base_url = _text(values, "VISION_BASE_URL").rstrip("/") or llm_base_url
+        split_active_keys = {
+            "ACTIVE_PRIVATE_ENABLED",
+            "ACTIVE_PRIVATE_TARGET_ID",
+            "ACTIVE_PRIVATE_PROMPT",
+            "ACTIVE_GROUP_ENABLED",
+            "ACTIVE_GROUP_TARGET_ID",
+            "ACTIVE_GROUP_PROMPT",
+        }
+        split_active_configured = bool(split_active_keys.intersection(values))
+        legacy_active_enabled = _enabled(values, "ACTIVE_ENABLED")
+        private_enabled = _enabled(values, "ACTIVE_PRIVATE_ENABLED")
+        private_target_id = _text(values, "ACTIVE_PRIVATE_TARGET_ID")
+        private_prompt = _text(values, "ACTIVE_PRIVATE_PROMPT")
+        group_enabled = _enabled(values, "ACTIVE_GROUP_ENABLED")
+        group_target_id = _text(values, "ACTIVE_GROUP_TARGET_ID")
+        group_prompt = _text(values, "ACTIVE_GROUP_PROMPT")
+        if not split_active_configured and legacy_active_enabled:
+            legacy_target_id = _text(values, "ACTIVE_TARGET_ID")
+            legacy_prompt = _text(values, "ACTIVE_PROMPT")
+            if legacy_target_type == "group":
+                group_enabled, group_target_id, group_prompt = True, legacy_target_id, legacy_prompt
+            else:
+                private_enabled, private_target_id, private_prompt = True, legacy_target_id, legacy_prompt
+        elif split_active_configured:
+            # New per-target settings take precedence over the legacy single-target keys.
+            legacy_active_enabled = False
         return cls(
             llm_api_key=llm_api_key,
             llm_base_url=llm_base_url,
@@ -209,11 +246,17 @@ class Settings:
             followup_seconds=_float(values, "FOLLOWUP_SECONDS", 120.0, 0.0, 3600.0),
             reaction_mode=reaction_mode,
             emoji_catalog_file=_text(values, "EMOJI_CATALOG"),
-            active_enabled=_text(values, "ACTIVE_ENABLED", "false").lower() in {"1", "true", "yes", "on"},
+            active_enabled=legacy_active_enabled,
             active_interval_minutes=_float(values, "ACTIVE_INTERVAL_MINUTES", 60.0, 1.0, 10080.0),
-            active_target_type=active_target_type,
+            active_target_type=legacy_target_type,
             active_target_id=_text(values, "ACTIVE_TARGET_ID"),
             active_prompt=_text(values, "ACTIVE_PROMPT"),
+            active_private_enabled=private_enabled,
+            active_private_target_id=private_target_id,
+            active_private_prompt=private_prompt,
+            active_group_enabled=group_enabled,
+            active_group_target_id=group_target_id,
+            active_group_prompt=group_prompt,
             tools_enabled=_text(values, "TOOLS_ENABLED", "false").lower() in {"1", "true", "yes", "on"},
             tool_allowlist=tool_allowlist,
             typing_status=_text(values, "TYPING_STATUS", "true").lower()
@@ -262,6 +305,14 @@ class Settings:
             raise ConfigError("ACTIVE_TARGET_ID and ACTIVE_PROMPT are required when ACTIVE_ENABLED is true")
         if self.active_enabled and not self.active_target_id.isdigit():
             raise ConfigError("ACTIVE_TARGET_ID must be a numeric QQ or group id")
+        for label, enabled, target_id, prompt in (
+            ("private", self.active_private_enabled, self.active_private_target_id, self.active_private_prompt),
+            ("group", self.active_group_enabled, self.active_group_target_id, self.active_group_prompt),
+        ):
+            if enabled and (not target_id or not prompt):
+                raise ConfigError(f"ACTIVE_{label.upper()}_TARGET_ID and ACTIVE_{label.upper()}_PROMPT are required when enabled")
+            if enabled and not target_id.isdigit():
+                raise ConfigError(f"ACTIVE_{label.upper()}_TARGET_ID must be a numeric QQ or group id")
         if bool(self.supabase_url) != bool(self.supabase_key):
             raise ConfigError("SUPABASE_URL and SUPABASE_SECRET_KEY must be set together")
         if self.supabase_url and not self.supabase_url.startswith("https://"):
