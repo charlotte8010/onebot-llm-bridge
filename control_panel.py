@@ -76,8 +76,8 @@ HELP_TEXTS: dict[str, str] = {
     "TOOL_ALLOWLIST": "勾选后，模型才可以请求对应工具；没有勾选的工具即使被模型请求也不会执行。",
     "NAPCAT_API_URL": "NapCat 的 HTTP Server 地址，通常是 http://127.0.0.1:3000。控制台和 Bridge 通过它发消息。",
     "NAPCAT_ACCESS_TOKEN": "NapCat HTTP Server 的访问 Token。它和“事件上报 Token”不是同一个东西。",
-    "NAPCAT_EVENT_TOKEN": "NapCat 向 Bridge 上报消息时使用的 Token，必须和 NapCat OneBot11 HTTP 上报配置一致。",
-    "BOT_SERVICE_TOKEN": "Bridge 调用本地 Bot 服务时使用的 Token，必须和 Bot 服务的配置一致。",
+    "NAPCAT_EVENT_TOKEN": "去 NapCat WebUI → 网络配置 → OneBot11 → HTTP 上报服务（HTTP Client），打开上报到 8766/onebot 的配置，复制其中的 Token 到这里。它不是 3000 的 NapCat API Token，也不是 Bot 服务 Token。",
+    "BOT_SERVICE_TOKEN": "这个 Token 不在 NapCat 里。它由本项目的 Bot 服务（8765）和 Bridge 共用；可以在控制台这里自行填写一串随机字符串，保存后由两边共同读取 .env.local。",
     "BRIDGE_PORT": "Bridge 接收 NapCat 事件的端口，默认 8766。",
     "BOT_SERVICE_PORT": "Bot 服务提供模型回复的端口，默认 8765。",
     "NAPCAT_BOOT": "NapCat 启动程序路径。填写 launcher.bat 时只启动 launcher，由它自己查找 QQ；只有直接填写 NapCatWinBootMain.exe 时才需要 QQ 和 Hook。",
@@ -126,8 +126,9 @@ HELP_SECTIONS: tuple[tuple[str, str], ...] = (
 • 8766：Bridge 的 OneBot HTTP 上报入口，NapCat 把收到的 QQ 消息发到这里。
 • 8765：Bot 服务，负责调用模型并返回回复。
 
-事件上报 Token 写在 NapCat 的 OneBot11 HTTP 上报配置里，必须和控制台的“事件上报 Token”一致。
-Bot 服务 Token 是 Bridge 调用 8765 时用的，必须和 Bot 服务配置一致。
+事件上报 Token 的位置：NapCat WebUI → 网络配置 → OneBot11 → HTTP 上报服务（HTTP Client）。打开指向 http://127.0.0.1:8766/onebot 的配置，把其中的 Token 复制到控制台“事件上报 Token”。
+
+Bot 服务 Token 不在 NapCat 里。它是本项目内部 8765 端口的共享密码，在控制台填写一串随机字符串即可；Bot 和 Bridge 都从同一个 .env.local 读取，所以两边会自动一致。
 出现 401 通常是 Token 不一致；出现 8766 连接拒绝通常是 Bridge 没启动或端口填错。""",
     ),
     (

@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from control_panel import HELP_SECTIONS, OPTION_LABELS, ControlPanel, build_napcat_command, discover_qq_executable, local_url_port, load_env_file, load_theme, parse_port, parse_model_ids, probe_models, save_env_file, save_theme
+from control_panel import HELP_SECTIONS, HELP_TEXTS, OPTION_LABELS, ControlPanel, build_napcat_command, discover_qq_executable, local_url_port, load_env_file, load_theme, parse_port, parse_model_ids, probe_models, save_env_file, save_theme
 
 
 class ControlPanelHelperTests(unittest.TestCase):
@@ -83,6 +83,10 @@ class ControlPanelHelperTests(unittest.TestCase):
         titles = {title for title, _content in HELP_SECTIONS}
         self.assertIn("第一次启动", titles)
         self.assertIn("配置 Supabase", titles)
+
+    def test_token_help_explains_where_each_token_belongs(self):
+        self.assertIn("NapCat WebUI", HELP_TEXTS["NAPCAT_EVENT_TOKEN"])
+        self.assertIn("不在 NapCat", HELP_TEXTS["BOT_SERVICE_TOKEN"])
 
     def test_probe_models_uses_bearer_key_and_counts_models(self):
         class Response:
