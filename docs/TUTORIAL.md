@@ -182,6 +182,7 @@ BOT_NAMES=bot,助手,你的机器人昵称
 `忘记：内容` 删除完全相同的事实。普通聊天不会自动写入事实，避免把玩笑误记成偏好。
 
 `REACTION_MODE=like` 允许模型使用 `[[REACTION:emoji_id]]` 对收到的消息发送 QQ 表情回应；默认关闭。
+推荐同时设置 `EMOJI_CATALOG=./examples/emoji_catalog.example.json`。词典中为每个表情填写名称、含义、使用场景和 NapCat 数字 ID，模型只选择名称，程序负责转换成 ID，避免模型瞎猜数字。
 主动消息也默认关闭。开启时必须填写目标 QQ/群号和提示词，例如：
 
 ```dotenv

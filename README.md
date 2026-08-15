@@ -89,6 +89,10 @@ Set `REACTION_MODE=like` to allow the model marker
 messages require a target and prompt; they send the model's generated bubbles
 at the configured interval.
 
+Set `EMOJI_CATALOG=./examples/emoji_catalog.example.json` to teach reaction
+meanings explicitly. The model selects a name such as `赞` or `笑哭`; the
+bridge resolves it to the numeric NapCat ID.
+
 Tools are also opt-in and allowlisted. The current built-in example is
 `get_time`; a model can request it with `[[TOOL:get_time]]`, after which the
 tool result is fed back into the model. Tool code is registered in

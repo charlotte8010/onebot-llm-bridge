@@ -111,6 +111,7 @@ class Settings:
     debounce_random: bool = False
     followup_seconds: float = 120.0
     reaction_mode: str = "off"
+    emoji_catalog_file: str = ""
     active_enabled: bool = False
     active_interval_minutes: float = 60.0
     active_target_type: str = "private"
@@ -207,6 +208,7 @@ class Settings:
             debounce_random=debounce_random,
             followup_seconds=_float(values, "FOLLOWUP_SECONDS", 120.0, 0.0, 3600.0),
             reaction_mode=reaction_mode,
+            emoji_catalog_file=_text(values, "EMOJI_CATALOG"),
             active_enabled=_text(values, "ACTIVE_ENABLED", "false").lower() in {"1", "true", "yes", "on"},
             active_interval_minutes=_float(values, "ACTIVE_INTERVAL_MINUTES", 60.0, 1.0, 10080.0),
             active_target_type=active_target_type,

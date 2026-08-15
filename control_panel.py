@@ -676,6 +676,7 @@ class ControlPanel(tk.Tk):
         self.active_prompt = self._entry(behavior, 10, "主动消息提示", "ACTIVE_PROMPT", "")
         self.persona = self._entry(behavior, 11, "Persona 文件", "PERSONA_FILE", "")
         self.tool_allowlist = self._entry(behavior, 12, "工具白名单", "TOOL_ALLOWLIST", "get_time", column=2)
+        self.emoji_catalog = self._entry(behavior, 13, "表情词典文件", "EMOJI_CATALOG", "", column=2)
 
         self.settings = network_content
         network = ttk.LabelFrame(self.settings, text="服务与 Token", padding=14, style="Section.TLabelframe")
@@ -880,6 +881,7 @@ class ControlPanel(tk.Tk):
             "ACTIVE_INTERVAL_MINUTES": self.active_interval.get().strip(), "ACTIVE_TARGET_TYPE": self.active_target_type.get().strip(),
             "ACTIVE_TARGET_ID": self.active_target_id.get().strip(), "ACTIVE_PROMPT": self.active_prompt.get().strip(),
             "TOOLS_ENABLED": "true" if self.tools_enabled.get() else "false", "TOOL_ALLOWLIST": self.tool_allowlist.get().strip(),
+            "EMOJI_CATALOG": self.emoji_catalog.get().strip(),
             "TYPING_STATUS": "true" if self.typing.get() else "false", "PERSONA_FILE": self.persona.get().strip(),
             "NAPCAT_API_URL": self.napcat_url.get().strip(), "NAPCAT_ACCESS_TOKEN": self.napcat_access.get().strip(), "NAPCAT_EVENT_TOKEN": self.event_token.get().strip(),
             "BOT_SERVICE_TOKEN": self.service_token.get().strip(), "BRIDGE_PORT": self.bridge_port.get().strip(), "BOT_SERVICE_PORT": self.bot_port.get().strip(),

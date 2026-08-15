@@ -32,6 +32,12 @@ class FormattingAndPolicyTests(unittest.TestCase):
             (["好耶"], "128077"),
         )
 
+    def test_reply_actions_accepts_semantic_reaction_name(self) -> None:
+        self.assertEqual(
+            parse_reply_actions("[[REACTION:赞]]太好了"),
+            (["太好了"], "赞"),
+        )
+
     def test_private_messages_reply(self) -> None:
         decision = decide_reply(message(), group_mode="mention", group_allowlist=frozenset())
         self.assertTrue(decision.should_reply)

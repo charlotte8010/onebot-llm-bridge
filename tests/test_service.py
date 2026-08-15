@@ -1,4 +1,7 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from onebot_llm_bridge.config import Settings
 from onebot_llm_bridge.providers import ProviderError
@@ -144,3 +147,24 @@ class BotServiceVisionTests(unittest.TestCase):
         )
         with self.assertRaises(ProviderError):
             service.decide({"message": "hello", "context": [], "target_message_ids": ["1"]})
+
+    def test_named_reaction_is_resolved_through_catalog(self):
+        with tempfile.TemporaryDirectory() as directory:
+            catalog = Path(directory) / "emojis.json"
+            catalog.write_text(
+                json.dumps({"赞": {"id": "128077", "meaning": "认可", "usage": "偶尔使用"}}),
+                encoding="utf-8",
+            )
+            settings = Settings.from_values(
+                {
+                    "LLM_API_KEY": "chat-key",
+                    "LLM_BASE_URL": "https://chat.example/v1",
+                    "LLM_MODEL": "chat-model",
+                    "REACTION_MODE": "like",
+                    "EMOJI_CATALOG": str(catalog),
+                }
+            )
+            service = BotService(settings, provider=FakeProvider("[[REACTION:赞]]"))
+            result = service.reply({"message": "太好了", "context": []})
+            self.assertEqual(result["bubbles"], [])
+            self.assertEqual(result["reaction_id"], "128077")

@@ -4,11 +4,11 @@ import re
 
 
 _BUBBLE_MARKER = re.compile(r"\[\[BUBBLE\]\]", re.IGNORECASE)
-_REACTION_MARKER = re.compile(r"\[\[REACTION\s*:\s*(\d{1,6})\]\]", re.IGNORECASE)
+_REACTION_MARKER = re.compile(r"\[\[REACTION\s*:\s*([^\]]{1,64})\]\]", re.IGNORECASE)
 
 
 def parse_reply_actions(text: str, max_bubbles: int = 4, max_chars: int = 600) -> tuple[list[str], str | None]:
-    """Parse safe text bubbles and an optional numeric QQ reaction marker."""
+    """Parse safe text bubbles and an optional QQ reaction name or numeric marker."""
     reaction_match = _REACTION_MARKER.search(text)
     reaction_id = reaction_match.group(1) if reaction_match else None
     cleaned = _REACTION_MARKER.sub("", text)
