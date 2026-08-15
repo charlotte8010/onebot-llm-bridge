@@ -435,9 +435,26 @@ def build_napcat_command(boot: str, qq: str = "", hook: str = "") -> list[str]:
     return [str(boot_path), qq, hook]
 
 
+def build_napcat_nt_command(boot: str, qq: str, hook: str) -> list[str]:
+    """Build a direct QQNT boot command for a standard NapCat launcher folder."""
+    boot_path = Path(boot)
+    boot_exe = boot_path if boot_path.suffix.lower() not in {".bat", ".cmd"} else boot_path.parent / "NapCatWinBootMain.exe"
+    return [str(boot_exe), qq, hook]
+
+
 def discover_qq_executable(boot: str) -> Path | None:
     """Find QQNT from the Windows uninstall entry or common install paths."""
     candidates: list[Path] = []
+    boot_path = Path(boot)
+    if boot_path.anchor:
+        drive_root = Path(boot_path.anchor)
+        candidates.extend(
+            (
+                drive_root / "QQNT" / "QQ.exe",
+                drive_root / "Program Files" / "Tencent" / "QQNT" / "QQ.exe",
+                drive_root / "Program Files (x86)" / "Tencent" / "QQNT" / "QQ.exe",
+            )
+        )
     try:
         import winreg
 
@@ -456,16 +473,6 @@ def discover_qq_executable(boot: str) -> Path | None:
     except ImportError:
         pass
 
-    boot_path = Path(boot)
-    if boot_path.anchor:
-        drive_root = Path(boot_path.anchor)
-        candidates.extend(
-            (
-                drive_root / "QQNT" / "QQ.exe",
-                drive_root / "Program Files" / "Tencent" / "QQNT" / "QQ.exe",
-                drive_root / "Program Files (x86)" / "Tencent" / "QQNT" / "QQ.exe",
-            )
-        )
     seen: set[Path] = set()
     for candidate in candidates:
         candidate = candidate.resolve()
@@ -2133,13 +2140,41 @@ class ControlPanel(tk.Tk):
             return
         boot_path = Path(boot)
         command_boot, command_qq, command_hook = boot, qq, hook
+        launch_env = os.environ.copy()
         if launcher_mode:
-            self._append_log("使用 NapCat launcher，不读取 QQ 和 Hook 路径")
-        command = build_napcat_command(command_boot, command_qq, command_hook)
+            discovered_qq = discover_qq_executable(boot)
+            direct_hook = Path(hook) if hook else boot_path.parent / "NapCatWinBootHook.dll"
+            direct_boot = boot_path.parent / "NapCatWinBootMain.exe"
+            if discovered_qq and direct_boot.is_file() and direct_hook.is_file():
+                command_qq = str(discovered_qq)
+                command_hook = str(direct_hook)
+                command = build_napcat_nt_command(command_boot, command_qq, command_hook)
+                main_path = (boot_path.parent / "napcat.mjs").resolve()
+                launch_env.update(
+                    {
+                        "NAPCAT_PATCH_PACKAGE": str(boot_path.parent / "qqnt.json"),
+                        "NAPCAT_LOAD_PATH": str(boot_path.parent / "loadNapCat.js"),
+                        "NAPCAT_INJECT_PATH": command_hook,
+                        "NAPCAT_LAUNCHER_PATH": str(direct_boot),
+                        "NAPCAT_MAIN_PATH": main_path.as_posix(),
+                    }
+                )
+                load_path = boot_path.parent / "loadNapCat.js"
+                load_path.write_text(
+                    f'(async () => {{await import("file:///{main_path.as_posix().lstrip("/")}")}})()\n',
+                    encoding="utf-8",
+                )
+                self._append_log(f"launcher 已自动选择 QQNT：{command_qq}")
+            else:
+                command = build_napcat_command(command_boot, command_qq, command_hook)
+                self._append_log("使用 NapCat launcher，由 launcher 自己查找 QQ")
+        else:
+            command = build_napcat_command(command_boot, command_qq, command_hook)
         try:
             self.napcat_process = subprocess.Popen(
                 command,
                 cwd=boot_path.parent,
+                env=launch_env,
                 creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
             )
         except OSError as exc:

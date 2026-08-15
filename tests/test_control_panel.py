@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from control_panel import HELP_SECTIONS, HELP_TEXTS, OPTION_LABELS, ControlPanel, build_napcat_command, discover_qq_executable, generate_service_token, local_url_port, load_env_file, load_theme, parse_port, parse_model_ids, probe_models, save_env_file, save_theme, vision_status
+from control_panel import HELP_SECTIONS, HELP_TEXTS, OPTION_LABELS, ControlPanel, build_napcat_command, build_napcat_nt_command, discover_qq_executable, generate_service_token, local_url_port, load_env_file, load_theme, parse_port, parse_model_ids, probe_models, save_env_file, save_theme, vision_status
 
 
 class ControlPanelHelperTests(unittest.TestCase):
@@ -50,6 +50,20 @@ class ControlPanelHelperTests(unittest.TestCase):
         self.assertEqual(
             build_napcat_command("E:/Napcat/NapCat.Shell/NapCatWinBootMain.exe", "E:/QQNT/QQ.exe", "E:/Napcat/NapCat.Shell/NapCatWinBootHook.dll"),
             ["E:\\Napcat\\NapCat.Shell\\NapCatWinBootMain.exe", "E:/QQNT/QQ.exe", "E:/Napcat/NapCat.Shell/NapCatWinBootHook.dll"],
+        )
+
+    def test_launcher_can_be_resolved_to_direct_qqnt_boot(self):
+        self.assertEqual(
+            build_napcat_nt_command(
+                "E:/Napcat/NapCat.Shell/launcher.bat",
+                "E:/QQNT/QQ.exe",
+                "E:/Napcat/NapCat.Shell/NapCatWinBootHook.dll",
+            ),
+            [
+                "E:\\Napcat\\NapCat.Shell\\NapCatWinBootMain.exe",
+                "E:/QQNT/QQ.exe",
+                "E:/Napcat/NapCat.Shell/NapCatWinBootHook.dll",
+            ],
         )
 
     def test_napcat_qq_discovery_uses_install_location_on_current_machine(self):
