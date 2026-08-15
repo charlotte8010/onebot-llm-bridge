@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from control_panel import HELP_SECTIONS, OPTION_LABELS, ControlPanel, build_napcat_command, local_url_port, load_env_file, load_theme, parse_port, parse_model_ids, probe_models, save_env_file, save_theme
+from control_panel import HELP_SECTIONS, OPTION_LABELS, ControlPanel, build_napcat_command, discover_qq_executable, local_url_port, load_env_file, load_theme, parse_port, parse_model_ids, probe_models, save_env_file, save_theme
 
 
 class ControlPanelHelperTests(unittest.TestCase):
@@ -47,6 +47,11 @@ class ControlPanelHelperTests(unittest.TestCase):
             build_napcat_command("E:/Napcat/NapCat.Shell/NapCatWinBootMain.exe", "E:/QQNT/QQ.exe", "E:/Napcat/NapCat.Shell/NapCatWinBootHook.dll"),
             ["E:\\Napcat\\NapCat.Shell\\NapCatWinBootMain.exe", "E:/QQNT/QQ.exe", "E:/Napcat/NapCat.Shell/NapCatWinBootHook.dll"],
         )
+
+    def test_napcat_qq_discovery_uses_install_location_on_current_machine(self):
+        if not Path("E:/QQNT/QQ.exe").is_file():
+            self.skipTest("QQNT is not installed at the local test path")
+        self.assertEqual(discover_qq_executable("E:/Napcat/NapCat.Shell/launcher.bat"), Path("E:/QQNT/QQ.exe"))
 
     def test_theme_defaults_to_morandi_and_round_trips(self):
         with tempfile.TemporaryDirectory() as directory:

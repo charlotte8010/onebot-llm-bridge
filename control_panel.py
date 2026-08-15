@@ -80,7 +80,7 @@ HELP_TEXTS: dict[str, str] = {
     "BOT_SERVICE_TOKEN": "Bridge 调用本地 Bot 服务时使用的 Token，必须和 Bot 服务的配置一致。",
     "BRIDGE_PORT": "Bridge 接收 NapCat 事件的端口，默认 8766。",
     "BOT_SERVICE_PORT": "Bot 服务提供模型回复的端口，默认 8765。",
-    "NAPCAT_BOOT": "NapCat 启动程序路径。填写 launcher.bat 时会由 NapCat 自动查找 QQ；填写 NapCatWinBootMain.exe 时才需要另外填写 QQ 和 Hook。",
+    "NAPCAT_BOOT": "NapCat 启动程序路径。填写 launcher.bat 时控制台会尝试自动找到 QQ；填写 NapCatWinBootMain.exe 时才需要另外填写 QQ 和 Hook。",
     "NAPCAT_QQ": "QQ.exe 的路径。要和 NapCat 使用的 QQNT 安装保持一致。",
     "NAPCAT_HOOK": "NapCatWinBootHook.dll 的路径，用于注入 NapCat。",
     "SUPABASE_URL": "Supabase 项目 URL，例如 https://xxxx.supabase.co。只填写项目地址，不要填 /rest/v1。",
@@ -349,6 +349,48 @@ def build_napcat_command(boot: str, qq: str = "", hook: str = "") -> list[str]:
         command_shell = os.environ.get("COMSPEC", "cmd.exe")
         return [command_shell, "/d", "/c", f'call "{boot_path}"']
     return [str(boot_path), qq, hook]
+
+
+def discover_qq_executable(boot: str) -> Path | None:
+    """Find QQNT from the Windows uninstall entry or common install paths."""
+    candidates: list[Path] = []
+    try:
+        import winreg
+
+        registry_locations = (
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\QQ"),
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\QQ"),
+        )
+        for root, key_name in registry_locations:
+            try:
+                with winreg.OpenKey(root, key_name) as key:
+                    uninstall, _ = winreg.QueryValueEx(key, "UninstallString")
+                uninstall_path = Path(str(uninstall).strip().strip('"'))
+                candidates.append(uninstall_path.parent / "QQ.exe")
+            except (FileNotFoundError, OSError):
+                continue
+    except ImportError:
+        pass
+
+    boot_path = Path(boot)
+    if boot_path.anchor:
+        drive_root = Path(boot_path.anchor)
+        candidates.extend(
+            (
+                drive_root / "QQNT" / "QQ.exe",
+                drive_root / "Program Files" / "Tencent" / "QQNT" / "QQ.exe",
+                drive_root / "Program Files (x86)" / "Tencent" / "QQNT" / "QQ.exe",
+            )
+        )
+    seen: set[Path] = set()
+    for candidate in candidates:
+        candidate = candidate.resolve()
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 class ServiceProcess:
@@ -1789,7 +1831,23 @@ class ControlPanel(tk.Tk):
             )
             return
         boot_path = Path(boot)
-        command = build_napcat_command(boot, qq, hook)
+        command_boot, command_qq, command_hook = boot, qq, hook
+        if launcher_mode and not qq and not hook:
+            discovered_qq = discover_qq_executable(boot)
+            adjacent_boot = boot_path.parent / "NapCatWinBootMain.exe"
+            adjacent_hook = boot_path.parent / "NapCatWinBootHook.dll"
+            if discovered_qq and adjacent_boot.is_file() and adjacent_hook.is_file():
+                command_boot = str(adjacent_boot)
+                command_qq = str(discovered_qq)
+                command_hook = str(adjacent_hook)
+                self.napcat_qq.delete(0, tk.END)
+                self.napcat_qq.insert(0, command_qq)
+                self.napcat_hook.delete(0, tk.END)
+                self.napcat_hook.insert(0, command_hook)
+                self._append_log(f"已自动找到 QQ：{discovered_qq}")
+            else:
+                self._append_log("未自动找到完整 QQ 路径，将交给 launcher.bat 自己处理")
+        command = build_napcat_command(command_boot, command_qq, command_hook)
         try:
             self.napcat_process = subprocess.Popen(
                 command,
