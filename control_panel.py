@@ -443,18 +443,30 @@ def build_napcat_nt_command(boot: str, qq: str, hook: str) -> list[str]:
 
 
 def discover_qq_executable(boot: str) -> Path | None:
-    """Find QQNT from the Windows uninstall entry or common install paths."""
+    """Find QQNT without assuming that it shares a drive with NapCat."""
     candidates: list[Path] = []
     boot_path = Path(boot)
+    drive_roots: list[Path] = []
     if boot_path.anchor:
-        drive_root = Path(boot_path.anchor)
+        drive_roots.append(Path(boot_path.anchor))
+    if os.name == "nt":
+        for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            drive_root = Path(f"{letter}:/")
+            if drive_root.exists() and drive_root not in drive_roots:
+                drive_roots.append(drive_root)
+    for drive_root in drive_roots:
         candidates.extend(
             (
                 drive_root / "QQNT" / "QQ.exe",
                 drive_root / "Program Files" / "Tencent" / "QQNT" / "QQ.exe",
                 drive_root / "Program Files (x86)" / "Tencent" / "QQNT" / "QQ.exe",
+                drive_root / "Tencent" / "QQNT" / "QQ.exe",
+                drive_root / "QQ" / "QQNT" / "QQ.exe",
             )
         )
+    local_app_data = os.environ.get("LOCALAPPDATA", "")
+    if local_app_data:
+        candidates.append(Path(local_app_data) / "Programs" / "Tencent" / "QQNT" / "QQ.exe")
     try:
         import winreg
 
@@ -2142,7 +2154,7 @@ class ControlPanel(tk.Tk):
         command_boot, command_qq, command_hook = boot, qq, hook
         launch_env = os.environ.copy()
         if launcher_mode:
-            discovered_qq = discover_qq_executable(boot)
+            discovered_qq = Path(qq) if qq and Path(qq).is_file() else discover_qq_executable(boot)
             direct_hook = Path(hook) if hook else boot_path.parent / "NapCatWinBootHook.dll"
             direct_boot = boot_path.parent / "NapCatWinBootMain.exe"
             if discovered_qq and direct_boot.is_file() and direct_hook.is_file():
