@@ -92,6 +92,7 @@ class ControlPanelHelperTests(unittest.TestCase):
     def test_generic_group_help_does_not_hardcode_persona_name(self):
         content = dict(HELP_SECTIONS)["群聊与消息形态"]
         self.assertNotIn("御茗", content)
+        self.assertNotIn("975426289", content)
 
     def test_token_help_explains_where_each_token_belongs(self):
         self.assertIn("NapCat WebUI", HELP_TEXTS["NAPCAT_EVENT_TOKEN"])
