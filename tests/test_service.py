@@ -1,6 +1,7 @@
 import unittest
 
 from onebot_llm_bridge.config import Settings
+from onebot_llm_bridge.providers import ProviderError
 from onebot_llm_bridge.services import BotService
 
 
@@ -11,6 +12,20 @@ class FakeProvider:
 
     def complete(self, messages, images=None):
         self.calls.append((messages, images or []))
+        return self.reply_text
+
+
+class FailingVisionProvider(FakeProvider):
+    def complete(self, messages, images=None):
+        self.calls.append((messages, images or []))
+        raise ProviderError("vision unavailable")
+
+
+class ImageRejectingProvider(FakeProvider):
+    def complete(self, messages, images=None):
+        self.calls.append((messages, images or []))
+        if images:
+            raise ProviderError("vision unsupported")
         return self.reply_text
 
 
@@ -52,3 +67,22 @@ class BotServiceVisionTests(unittest.TestCase):
         service = BotService(self.settings("off"), provider=chat)
         service.reply(self.payload())
         self.assertEqual(chat.calls[0][1], [])
+
+    def test_separate_mode_falls_back_when_vision_provider_fails(self):
+        chat = FakeProvider("只根据文字回复")
+        service = BotService(
+            self.settings("separate"),
+            provider=chat,
+            vision_provider=FailingVisionProvider("unused"),
+        )
+        result = service.reply(self.payload())
+        self.assertEqual(result["bubbles"], ["只根据文字回复"])
+        self.assertEqual(chat.calls[0][1], [])
+        self.assertNotIn("Image understanding", chat.calls[0][0][-1]["content"])
+
+    def test_direct_mode_retries_without_images_when_main_model_rejects_them(self):
+        chat = ImageRejectingProvider("文字降级回复")
+        service = BotService(self.settings("direct"), provider=chat)
+        result = service.reply(self.payload())
+        self.assertEqual(result["bubbles"], ["文字降级回复"])
+        self.assertEqual([call[1] for call in chat.calls], [["data:image/png;base64,abc"], []])

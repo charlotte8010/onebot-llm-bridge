@@ -134,25 +134,34 @@ class BotService:
         if images and self.settings.vision_mode == "separate":
             if self.vision_provider is None:
                 raise ProviderError("vision provider is not configured")
-            vision_note = self.vision_provider.complete(
-                [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You describe images for a chat assistant. State only visible, useful details. "
-                            "Do not guess identities, text, events, or context that cannot be seen."
-                        ),
-                    },
-                    {"role": "user", "content": "Describe the attached image(s) briefly for the next reply."},
-                ],
-                images=images,
-            )
-            user_prompt += "\n\nImage understanding from a separate vision model:\n" + vision_note
+            try:
+                vision_note = self.vision_provider.complete(
+                    [
+                        {
+                            "role": "system",
+                            "content": (
+                                "You describe images for a chat assistant. State only visible, useful details. "
+                                "Do not guess identities, text, events, or context that cannot be seen."
+                            ),
+                        },
+                        {"role": "user", "content": "Describe the attached image(s) briefly for the next reply."},
+                    ],
+                    images=images,
+                )
+            except ProviderError:
+                print("[vision] provider failed; continuing without image description")
+            if vision_note:
+                user_prompt += "\n\nImage understanding from a separate vision model:\n" + vision_note
             images = []
-        content = self.provider.complete(
-            [{"role": "system", "content": system}, {"role": "user", "content": user_prompt}],
-            images=images if self.settings.vision_mode == "direct" else [],
-        )
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": user_prompt}]
+        model_images = images if self.settings.vision_mode == "direct" else []
+        try:
+            content = self.provider.complete(messages, images=model_images)
+        except ProviderError:
+            if not model_images:
+                raise
+            print("[vision] main model rejected image input; retrying as text")
+            content = self.provider.complete(messages, images=[])
         bubbles = split_bubbles(content)
         if not bubbles:
             raise ProviderError("model reply contained no usable bubbles")
