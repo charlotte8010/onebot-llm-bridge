@@ -107,6 +107,12 @@ class ControlPanelHelperTests(unittest.TestCase):
         titles = {title for title, _content in HELP_SECTIONS}
         self.assertIn("第一次启动", titles)
         self.assertIn("配置 Supabase", titles)
+        self.assertIn("控制台小功能", titles)
+
+    def test_help_explains_persona_editor_and_save_restart_flow(self):
+        content = dict(HELP_SECTIONS)["Persona、记忆与词典"]
+        self.assertIn("编辑 Persona", content)
+        self.assertIn("保存只修改本地文件，不会自动重启服务", content)
 
     def test_generic_group_help_does_not_hardcode_persona_name(self):
         content = dict(HELP_SECTIONS)["群聊与消息形态"]
