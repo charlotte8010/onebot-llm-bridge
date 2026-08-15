@@ -429,6 +429,8 @@ def format_panel_error(stage: str, error: BaseException | str) -> str:
         advice = "认证信息不正确或已失效。检查对应服务的 Token/API Key，并确认没有把 NapCat、事件上报和 Bot Token 混用。"
     elif "403" in lowered or "forbidden" in lowered:
         advice = "服务拒绝了请求。检查 API Key 权限、接口地址和中转站是否允许这个接口；/models 被禁用时可以手动填写模型名。"
+    elif "chat/completions" in lowered or "具体接口路径" in lowered:
+        advice = "Base URL 应填写服务根地址，例如 https://example.com/v1，不要填写 /chat/completions、/responses 或其他具体请求路径。"
     elif "404" in lowered or "not found" in lowered:
         advice = "接口地址或路径不对。检查 Base URL 是否应该包含 /v1，端口是否正确，以及目标服务是否真的提供这个接口。"
     elif "timed out" in lowered or "timeout" in lowered or "超时" in lowered:
@@ -892,6 +894,10 @@ class ControlPanel(tk.Tk):
         self.bridge = ServiceProcess("bridge", BRIDGE_SCRIPT, self.log_queue)
         self.napcat_process: subprocess.Popen[bytes] | None = None
         self._status_probe_in_flight = False
+        self._model_detection_generation = {"chat": 0, "vision": 0}
+        self._model_detection_jobs: dict[str, str | None] = {"chat": None, "vision": None}
+        self._diagnostics_generation = 0
+        self._diagnostics_timeout_job: str | None = None
         self._build_ui()
         self.after(200, self._drain_logs)
         self.after(1000, self._refresh_status)
@@ -1872,13 +1878,27 @@ class ControlPanel(tk.Tk):
                 )
             )
             return
+        if any(base.lower().endswith(suffix) for suffix in ("/chat/completions", "/responses", "/models")):
+            self._append_log(
+                format_panel_error(
+                    f"{kind} 模型检测",
+                    "Base URL 填成了具体接口路径，而不是服务根地址",
+                )
+            )
+            return
         if button.instate(["disabled"]):
             return
         endpoint = f"{base}/models"
+        self._model_detection_generation[kind] += 1
+        generation = self._model_detection_generation[kind]
         button.configure(text="检测中...")
         button.state(["disabled"])
         self._append_log(f"正在检测 {kind} 模型：{endpoint}")
-        threading.Thread(target=self._fetch_models, args=(kind, endpoint, key), daemon=True).start()
+        self._model_detection_jobs[kind] = self.after(
+            15000,
+            lambda kind=kind, generation=generation: self._model_detection_timeout(kind, generation),
+        )
+        threading.Thread(target=self._fetch_models, args=(kind, endpoint, key, generation), daemon=True).start()
 
     def detect_chat_models(self) -> None:
         self._detect_models("chat")
@@ -1886,31 +1906,56 @@ class ControlPanel(tk.Tk):
     def detect_vision_models(self) -> None:
         self._detect_models("vision")
 
-    def _fetch_models(self, kind: str, endpoint: str, key: str) -> None:
+    def _fetch_models(self, kind: str, endpoint: str, key: str, generation: int) -> None:
         try:
             request = Request(endpoint, headers={"Accept": "application/json", "Authorization": f"Bearer {key}"}, method="GET")
             with urlopen(request, timeout=12) as response:
                 models = parse_model_ids(json.loads(response.read().decode("utf-8")))
             if not models:
                 raise ValueError("/models 没有返回 data[].id")
-            self.after(0, lambda: self._models_detected(kind, models))
+            self.after(0, lambda: self._models_detected(kind, models, generation))
         except HTTPError as exc:
-            self.after(0, lambda error=exc: self._models_failed(kind, error))
+            self.after(0, lambda error=exc: self._models_failed(kind, error, generation))
         except (OSError, URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
-            self.after(0, lambda error=exc: self._models_failed(kind, error))
+            self.after(0, lambda error=exc: self._models_failed(kind, error, generation))
+        except Exception as exc:
+            self.after(0, lambda error=exc: self._models_failed(kind, error, generation))
 
-    def _models_detected(self, kind: str, models: list[str]) -> None:
+    def _models_detected(self, kind: str, models: list[str], generation: int) -> None:
+        if generation != self._model_detection_generation[kind]:
+            return
         box = self.model_box if kind == "chat" else self.vision_model_box
         box.configure(values=models)
-        self._finish_model_detection(kind)
+        self._finish_model_detection(kind, generation)
         self._append_log(f"{kind} 检测到 {len(models)} 个模型，可从下拉框选择")
 
-    def _models_failed(self, kind: str, reason: BaseException | str) -> None:
-        self._finish_model_detection(kind)
+    def _models_failed(self, kind: str, reason: BaseException | str, generation: int) -> None:
+        if generation != self._model_detection_generation[kind]:
+            return
+        self._finish_model_detection(kind, generation)
         self._append_log(format_panel_error(f"{kind} 模型检测", reason))
         self._append_log("当前模型输入不会被清空；可以修正地址或密钥后重新检测")
 
-    def _finish_model_detection(self, kind: str) -> None:
+    def _model_detection_timeout(self, kind: str, generation: int) -> None:
+        if generation != self._model_detection_generation[kind]:
+            return
+        button = self.model_detect_button if kind == "chat" else self.vision_detect_button
+        if not button.instate(["disabled"]):
+            return
+        self._finish_model_detection(kind, generation)
+        self._append_log(format_panel_error(f"{kind} 模型检测", "请求超过 15 秒仍未完成"))
+        self._append_log("如果服务日志同时出现 HTTP 400，请把 Base URL 改成服务根地址，不要带 /chat/completions")
+
+    def _finish_model_detection(self, kind: str, generation: int | None = None) -> None:
+        if generation is not None and generation != self._model_detection_generation[kind]:
+            return
+        job = self._model_detection_jobs[kind]
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except tk.TclError:
+                pass
+            self._model_detection_jobs[kind] = None
         button = self.model_detect_button if kind == "chat" else self.vision_detect_button
         button.configure(text="检测模型")
         button.state(["!disabled"])
@@ -2316,44 +2361,70 @@ class ControlPanel(tk.Tk):
         self.diagnostics_button.configure(text="诊断中...")
         self.diagnostics_button.state(["disabled"])
         self._append_log("开始诊断：不会保存配置，也不会重启服务")
+        self._diagnostics_generation += 1
+        generation = self._diagnostics_generation
         values = self._current_config()
         values["BRIDGE_PORT"] = self.bridge_port.get().strip()
         values["BOT_SERVICE_PORT"] = self.bot_port.get().strip()
-        threading.Thread(target=self._diagnostics_worker, args=(values,), daemon=True).start()
+        self._diagnostics_timeout_job = self.after(30000, self._diagnostics_timeout)
+        threading.Thread(target=self._diagnostics_worker, args=(values, generation), daemon=True).start()
 
-    def _diagnostics_worker(self, values: dict[str, str]) -> None:
-        checks: list[tuple[str, Callable[[], str]]] = []
-        bot_port = parse_port(values.get("BOT_SERVICE_PORT", ""), 8765)
-        bridge_port = parse_port(values.get("BRIDGE_PORT", ""), 8766)
-        if bot_port is not None:
-            checks.append(("Bot service", lambda: probe_service(f"http://127.0.0.1:{bot_port}", values["BOT_SERVICE_TOKEN"])))
-        if bridge_port is not None:
-            checks.append(("Bridge", lambda: probe_service(f"http://127.0.0.1:{bridge_port}")))
-        if values["NAPCAT_API_URL"]:
-            checks.append(("NapCat", lambda: probe_napcat(values["NAPCAT_API_URL"], values["NAPCAT_ACCESS_TOKEN"])))
-        if values["LLM_BASE_URL"] and values["LLM_API_KEY"]:
-            checks.append(("Chat model", lambda: f"发现 {probe_models(values['LLM_BASE_URL'], values['LLM_API_KEY'])} 个模型"))
-        if values["VISION_MODE"] != "off":
-            vision_base = values["VISION_BASE_URL"] or values["LLM_BASE_URL"]
-            vision_key = values["VISION_API_KEY"] or values["LLM_API_KEY"]
-            if vision_base and vision_key:
-                checks.append(("Vision model", lambda: f"发现 {probe_models(vision_base, vision_key)} 个模型"))
-            else:
-                checks.append(("Vision model", missing_vision_config))
-        for label, check in checks:
+    def _diagnostics_worker(self, values: dict[str, str], generation: int) -> None:
+        try:
+            checks: list[tuple[str, Callable[[], str]]] = []
+            bot_port = parse_port(values.get("BOT_SERVICE_PORT", ""), 8765)
+            bridge_port = parse_port(values.get("BRIDGE_PORT", ""), 8766)
+            if bot_port is not None:
+                checks.append(("Bot service", lambda: probe_service(f"http://127.0.0.1:{bot_port}", values.get("BOT_SERVICE_TOKEN", ""))))
+            if bridge_port is not None:
+                checks.append(("Bridge", lambda: probe_service(f"http://127.0.0.1:{bridge_port}")))
+            napcat_url = values.get("NAPCAT_API_URL", "")
+            if napcat_url:
+                checks.append(("NapCat", lambda: probe_napcat(napcat_url, values.get("NAPCAT_ACCESS_TOKEN", ""))))
+            llm_base = values.get("LLM_BASE_URL", "")
+            llm_key = values.get("LLM_API_KEY", "")
+            if llm_base and llm_key:
+                checks.append(("Chat model", lambda: f"发现 {probe_models(llm_base, llm_key)} 个模型"))
+            if values.get("VISION_MODE", "off") != "off":
+                vision_base = values.get("VISION_BASE_URL", "") or llm_base
+                vision_key = values.get("VISION_API_KEY", "") or llm_key
+                if vision_base and vision_key:
+                    checks.append(("Vision model", lambda: f"发现 {probe_models(vision_base, vision_key)} 个模型"))
+                else:
+                    checks.append(("Vision model", missing_vision_config))
+            for label, check in checks:
+                try:
+                    result = check()
+                    self.after(0, lambda label=label, result=result: self._append_log(f"[通过] {label}: {result}"))
+                except (HTTPError, OSError, URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
+                    self.after(0, lambda label=label, error=exc: self._append_log(format_panel_error(f"诊断 · {label}", error)))
+                except Exception as exc:
+                    self.after(0, lambda label=label, error=exc: self._append_log(format_panel_error(f"诊断 · {label}", error)))
+        except Exception as exc:
+            self.after(0, lambda error=exc: self._append_log(format_panel_error("一键诊断流程", error)))
+        finally:
+            self.after(0, lambda: self._diagnostics_finished(generation))
+
+    def _diagnostics_finished(self, generation: int | None = None) -> None:
+        if generation is not None and generation != self._diagnostics_generation:
+            return
+        if self._diagnostics_timeout_job is not None:
             try:
-                result = check()
-                self.after(0, lambda label=label, result=result: self._append_log(f"[通过] {label}: {result}"))
-            except (HTTPError, OSError, URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
-                self.after(0, lambda label=label, error=exc: self._append_log(format_panel_error(f"诊断 · {label}", error)))
-            except Exception as exc:
-                self.after(0, lambda label=label, error=exc: self._append_log(format_panel_error(f"诊断 · {label}", error)))
-        self.after(0, self._diagnostics_finished)
-
-    def _diagnostics_finished(self) -> None:
+                self.after_cancel(self._diagnostics_timeout_job)
+            except tk.TclError:
+                pass
+            self._diagnostics_timeout_job = None
         self.diagnostics_button.configure(text="一键诊断")
         self.diagnostics_button.state(["!disabled"])
         self._append_log("诊断完成")
+
+    def _diagnostics_timeout(self) -> None:
+        self._diagnostics_timeout_job = None
+        if not self.diagnostics_button.instate(["disabled"]):
+            return
+        generation = self._diagnostics_generation
+        self._diagnostics_finished(generation)
+        self._append_log(format_panel_error("一键诊断", "诊断超过 30 秒仍未完成"))
 
     def _refresh_status(self) -> None:
         if self._status_probe_in_flight:
