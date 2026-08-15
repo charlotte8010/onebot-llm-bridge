@@ -1857,10 +1857,8 @@ class ControlPanel(tk.Tk):
                 command_boot = str(adjacent_boot)
                 command_qq = str(discovered_qq)
                 command_hook = str(adjacent_hook)
-                self.napcat_qq.delete(0, tk.END)
-                self.napcat_qq.insert(0, command_qq)
-                self.napcat_hook.delete(0, tk.END)
-                self.napcat_hook.insert(0, command_hook)
+                self.napcat_qq.set(command_qq)
+                self.napcat_hook.set(command_hook)
                 self._append_log(f"已自动找到 QQ：{discovered_qq}")
             else:
                 self._append_log("未自动找到完整 QQ 路径，将交给 launcher.bat 自己处理")
