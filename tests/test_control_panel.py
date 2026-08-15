@@ -41,6 +41,10 @@ class ControlPanelHelperTests(unittest.TestCase):
             build_napcat_command("E:/Napcat/NapCat.Shell/launcher.bat"),
             [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", 'call "E:\\Napcat\\NapCat.Shell\\launcher.bat"'],
         )
+        self.assertEqual(
+            build_napcat_command("E:/Napcat/NapCat.Shell/launcher.bat", "ignored-qq", "ignored-hook"),
+            [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", 'call "E:\\Napcat\\NapCat.Shell\\launcher.bat"'],
+        )
 
     def test_napcat_boot_exe_keeps_explicit_qq_and_hook(self):
         self.assertEqual(

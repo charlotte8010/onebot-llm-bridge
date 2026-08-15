@@ -80,7 +80,7 @@ HELP_TEXTS: dict[str, str] = {
     "BOT_SERVICE_TOKEN": "Bridge 调用本地 Bot 服务时使用的 Token，必须和 Bot 服务的配置一致。",
     "BRIDGE_PORT": "Bridge 接收 NapCat 事件的端口，默认 8766。",
     "BOT_SERVICE_PORT": "Bot 服务提供模型回复的端口，默认 8765。",
-    "NAPCAT_BOOT": "NapCat 启动程序路径。填写 launcher.bat 时控制台会尝试自动找到 QQ；填写 NapCatWinBootMain.exe 时才需要另外填写 QQ 和 Hook。",
+    "NAPCAT_BOOT": "NapCat 启动程序路径。填写 launcher.bat 时只启动 launcher，由它自己查找 QQ；只有直接填写 NapCatWinBootMain.exe 时才需要 QQ 和 Hook。",
     "NAPCAT_QQ": "QQ.exe 的路径。要和 NapCat 使用的 QQNT 安装保持一致。",
     "NAPCAT_HOOK": "NapCatWinBootHook.dll 的路径，用于注入 NapCat。",
     "SUPABASE_URL": "Supabase 项目 URL，例如 https://xxxx.supabase.co。只填写项目地址，不要填 /rest/v1。",
@@ -1590,7 +1590,10 @@ class ControlPanel(tk.Tk):
         selected = filedialog.askopenfilename(parent=self, title="选择 NapCat 启动程序")
         if selected:
             self.napcat_boot.set(selected)
-            self._autofill_napcat_paths(selected)
+            if Path(selected).suffix.lower() in {".bat", ".cmd"}:
+                self._append_log("已选择 NapCat launcher，启动时由 launcher 自己查找 QQ")
+            else:
+                self._autofill_napcat_paths(selected)
 
     def _autofill_napcat_paths(self, boot: str) -> None:
         """Fill QQ and Hook as soon as a NapCat launcher path is selected."""
@@ -1868,14 +1871,7 @@ class ControlPanel(tk.Tk):
         boot_path = Path(boot)
         command_boot, command_qq, command_hook = boot, qq, hook
         if launcher_mode:
-            self._autofill_napcat_paths(boot)
-            command_qq = self.napcat_qq.get().strip()
-            command_hook = self.napcat_hook.get().strip()
-            adjacent_boot = boot_path.parent / "NapCatWinBootMain.exe"
-            if command_qq and command_hook and adjacent_boot.is_file():
-                command_boot = str(adjacent_boot)
-            else:
-                self._append_log("未自动找到完整 QQ 路径，将交给 launcher.bat 自己处理")
+            self._append_log("使用 NapCat launcher，不读取 QQ 和 Hook 路径")
         command = build_napcat_command(command_boot, command_qq, command_hook)
         try:
             self.napcat_process = subprocess.Popen(
