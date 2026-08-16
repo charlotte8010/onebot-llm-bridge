@@ -110,6 +110,39 @@ class FormattingAndPolicyTests(unittest.TestCase):
         )
         self.assertEqual(continuation.reason, "active_topic")
 
+    def test_group_message_mentioning_someone_else_is_ignored(self) -> None:
+        addressed = message(kind="group", group_id="123", text="你怎么看")
+        addressed = NormalizedMessage(
+            **{**addressed.__dict__, "segments": ({"type": "at", "data": {"qq": "456"}},)}
+        )
+        decision = decide_reply(
+            addressed,
+            group_mode="all",
+            group_allowlist=frozenset({"123"}),
+            bot_qq="789",
+        )
+        self.assertFalse(decision.should_reply)
+        self.assertEqual(decision.reason, "mentions_other_user")
+
+    def test_group_message_mentioning_bot_and_someone_else_is_addressed(self) -> None:
+        addressed = message(kind="group", group_id="123", text="一起看看")
+        addressed = NormalizedMessage(
+            **{
+                **addressed.__dict__,
+                "segments": (
+                    {"type": "at", "data": {"qq": "456"}},
+                    {"type": "at", "data": {"qq": "789"}},
+                ),
+            }
+        )
+        decision = decide_reply(
+            addressed,
+            group_mode="mention",
+            group_allowlist=frozenset({"123"}),
+            bot_qq="789",
+        )
+        self.assertTrue(decision.should_reply)
+
     def test_model_decision_mode_accepts_unaddressed_smart_group_message(self) -> None:
         decision = decide_reply(
             message(kind="group", group_id="999"),

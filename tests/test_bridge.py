@@ -870,3 +870,54 @@ class BridgeTests(unittest.TestCase):
         )
         self.assertTrue(result["handled"])
         self.assertEqual(napcat.quoted, [("group", "999", "11")])
+
+    def test_reply_to_bot_message_quotes_new_incoming_message_instead(self):
+        class MessageIdNapCat(FakeNapCat):
+            def send_group(self, group_id, message, *, reply_to=None):
+                result = super().send_group(group_id, message, reply_to=reply_to)
+                return {"status": "ok", "message_id": "900"}
+
+        settings = Settings.from_values(
+            {
+                "LLM_API_KEY": "key",
+                "LLM_BASE_URL": "https://example.test/v1",
+                "LLM_MODEL": "chat",
+                "BOT_QQ": "2128191245",
+                "GROUP_MODE": "all",
+                "GROUP_ALLOWLIST": "999",
+                "DEBOUNCE_SECONDS": "0.01",
+            }
+        )
+        napcat = MessageIdNapCat()
+        bridge = Bridge(
+            settings,
+            napcat=napcat,
+            bot_request=lambda _payload: {"bubbles": ["收到"]},
+        )
+        first = bridge.handle_event(
+            {
+                "post_type": "message",
+                "message_type": "group",
+                "self_id": 2128191245,
+                "group_id": 999,
+                "user_id": 123,
+                "message_id": 1,
+                "message": "第一句",
+            }
+        )
+        second = bridge.handle_event(
+            {
+                "post_type": "message",
+                "message_type": "group",
+                "self_id": 2128191245,
+                "group_id": 999,
+                "user_id": 123,
+                "message_id": 2,
+                "message": "回复上一句",
+                "reply": {"id": 900},
+            }
+        )
+        bridge.shutdown()
+        self.assertTrue(first["handled"])
+        self.assertTrue(second["handled"])
+        self.assertEqual(napcat.quoted, [("group", "999", "1"), ("group", "999", "2")])

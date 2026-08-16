@@ -79,6 +79,33 @@ def _merge_context_messages(
     return merged[-limit:]
 
 
+def _safe_quote_target(
+    messages: list[NormalizedMessage],
+    context: list[NormalizedMessage],
+    target: str | None,
+) -> str | None:
+    """Never quote an earlier Bot message as the target of a new user turn."""
+    normalized_target = str(target or "").strip()
+    if not normalized_target:
+        return None
+    self_message_ids = {
+        item.message_id
+        for item in context
+        if item.is_self and item.message_id
+    }
+    if normalized_target not in self_message_ids:
+        return normalized_target
+    for item in messages:
+        if not item.is_self and item.message_id:
+            print(
+                f"quote target corrected: {normalized_target} is a Bot message; "
+                f"using incoming message {item.message_id}"
+            )
+            return item.message_id
+    print(f"quote target dropped: {normalized_target} is a Bot message")
+    return None
+
+
 def _context_transcript(context: object) -> str:
     """Render structured history as an explicit, chronological dialogue."""
     value = context
@@ -99,6 +126,13 @@ def _context_transcript(context: object) -> str:
             continue
         speaker = str(item.get("speaker", "unknown")).strip().lower()
         role = {"bot": "assistant", "other": "user"}.get(speaker, speaker or "unknown")
+        sender_name = str(item.get("sender_name", "")).strip().replace("\n", " ")
+        sender_id = str(item.get("sender_id", "")).strip().replace("\n", " ")
+        if role == "user" and (sender_name or sender_id):
+            identity = sender_name or sender_id
+            if sender_id and sender_id != identity:
+                identity += f"/{sender_id}"
+            role = f"user[{identity}]"
         lines.append(f"{role}: {text}")
     return "\n".join(lines) or "(no prior messages)"
 
@@ -326,9 +360,15 @@ class BotService:
                 "请像已经认识对方的人一样自然开启或继续这段聊天。"
             )
         else:
+            sender_name = str(payload.get("sender_name", "")).strip()
+            sender_id = str(payload.get("sender_id", "")).strip()
+            sender_label = sender_name or sender_id
+            if sender_name and sender_id and sender_id != sender_name:
+                sender_label += f"/{sender_id}"
+            current_label = f"user[{sender_label}]" if sender_label else "user"
             user_prompt = (
                 f"Recent conversation transcript (oldest to newest):\n{context_text}\n\n"
-                f"Current message from user:\n{message}"
+                f"Current message from {current_label}:\n{message}"
             )
         summary = str(payload.get("summary", "")).strip()
         if summary:
@@ -983,6 +1023,9 @@ class Bridge:
                 reply_to = routing["target_message_id"]
             elif mode == "smart_decision":
                 mode = "reply"
+            reply_to = _safe_quote_target(messages, context, reply_to)
+            if mode == "quote_reply" and not reply_to:
+                mode = "reply"
             # Match the old bridge: a normal group reply is attached to the
             # triggering message, while private messages stay unobtrusive.
             if (
@@ -1037,6 +1080,8 @@ class Bridge:
                 "message": "\n".join(item.text for item in messages if item.text),
                 "context": json.loads(json_context(model_context, self.settings.bot_qq)),
                 "conversation": first.conversation_key,
+                "sender_id": first.sender_id,
+                "sender_name": first.sender_name,
                 "images": images,
                 "facts": list(dict.fromkeys([*local_facts, *remote_facts]))[:100],
                 "summary": summary,

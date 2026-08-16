@@ -33,13 +33,16 @@ def decide_reply(
         return ReplyDecision(False, "group_not_allowlisted", "ignore")
     if group_mode == "off":
         return ReplyDecision(False, "group_mode_off", "ignore")
+    at_targets = {
+        str(segment.get("data", {}).get("qq", "")).strip()
+        for segment in message.segments
+        if segment.get("type") == "at"
+    }
+    mentioned_qq = bool(bot_qq and bot_qq in at_targets)
+    if at_targets and not mentioned_qq:
+        return ReplyDecision(False, "mentions_other_user", "ignore")
     if group_mode == "all":
         return ReplyDecision(True, "group_mode_all", reply_mode())
-    mentioned_qq = any(
-        segment.get("type") == "at"
-        and str(segment.get("data", {}).get("qq", "")) == bot_qq
-        for segment in message.segments
-    )
     addressed = (
         bool(message.reply_to)
         or

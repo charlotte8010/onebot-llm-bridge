@@ -88,6 +88,35 @@ class BotServiceVisionTests(unittest.TestCase):
         self.assertIn("assistant: I already said the topping is good.", prompt)
         self.assertIn("Current message from user:\nwhat now", prompt)
 
+    def test_group_history_keeps_other_speaker_identity(self):
+        chat = FakeProvider("answer")
+        service = BotService(self.settings("off"), provider=chat)
+        service.reply(
+            {
+                "message": "结巴那个呢",
+                "sender_name": "锅贴",
+                "sender_id": "123",
+                "context": [
+                    {
+                        "speaker": "other",
+                        "sender_name": "结巴",
+                        "sender_id": "456",
+                        "text": "我刚刚说到哪了",
+                    },
+                    {
+                        "speaker": "bot",
+                        "sender_name": "御茗",
+                        "sender_id": "789",
+                        "text": "你刚刚在说这个",
+                    },
+                ],
+            }
+        )
+        prompt = chat.calls[0][0][-1]["content"]
+        self.assertIn("user[结巴/456]: 我刚刚说到哪了", prompt)
+        self.assertIn("assistant: 你刚刚在说这个", prompt)
+        self.assertIn("Current message from user[锅贴/123]:", prompt)
+
     def test_reply_prompt_includes_builtin_human_chat_worldbook_before_persona(self):
         with tempfile.TemporaryDirectory() as directory:
             persona = Path(directory) / "persona.txt"
