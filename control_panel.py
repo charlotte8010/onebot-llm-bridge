@@ -955,6 +955,7 @@ class RoundedScrollbar(tk.Canvas):
         self._thumb_bounds = (0, 0, 0, 0)
         self._hover = False
         self._last_drag_target: float | None = None
+        self._dragging = False
         super().__init__(
             master,
             width=12,
@@ -968,6 +969,7 @@ class RoundedScrollbar(tk.Canvas):
         self.bind("<Configure>", lambda _event: self._draw(), add="+")
         self.bind("<Button-1>", self._press, add="+")
         self.bind("<B1-Motion>", self._drag, add="+")
+        self.bind("<ButtonRelease-1>", self._release, add="+")
         self.bind("<MouseWheel>", self._wheel, add="+")
         self.bind("<Enter>", self._enter, add="+")
         self.bind("<Leave>", self._leave, add="+")
@@ -991,8 +993,8 @@ class RoundedScrollbar(tk.Canvas):
         self._draw()
 
     def set(self, first: str | float, last: str | float) -> None:
-        self.first = float(first)
-        self.last = float(last)
+        self.first = max(0.0, min(1.0, float(first)))
+        self.last = max(self.first, min(1.0, float(last)))
         self._draw()
 
     def get(self) -> tuple[float, float]:
@@ -1013,7 +1015,12 @@ class RoundedScrollbar(tk.Canvas):
         thumb_height = max(26, int(visible * height))
         thumb_height = min(height, thumb_height)
         travel = max(height - thumb_height, 0)
-        top = int(max(0.0, min(1.0, self.first)) * travel)
+        # Tk's first fraction only ranges from 0 to (1 - visible). Map that
+        # range to the full physical travel so the thumb reaches the track
+        # bottom when the content reaches its real bottom.
+        max_first = max(1.0 - visible, 1e-9)
+        position = max(0.0, min(1.0, self.first / max_first))
+        top = int(position * travel)
         bottom = top + thumb_height
         left, right = 1, max(width - 1, 2)
         self.coords(self._thumb_id, left, top, right, bottom)
@@ -1025,27 +1032,37 @@ class RoundedScrollbar(tk.Canvas):
             color = self._thumb_active_color if self._hover else self._thumb_color
             self.itemconfigure(self._thumb_id, fill=color)
 
-    def _press(self, event: tk.Event[tk.Misc]) -> None:
+    def _press(self, event: tk.Event[tk.Misc]) -> str:
         left, top, right, bottom = self._thumb_bounds
         self._last_drag_target = None
+        self._dragging = False
         if bottom > top and left <= event.x <= right and top <= event.y <= bottom:
             self._drag_offset = event.y - top
-            return
+            self._dragging = True
+            return "break"
         self._scroll(-1 if bottom <= top or event.y < top else 1, pages=True)
+        return "break"
 
-    def _drag(self, event: tk.Event[tk.Misc]) -> None:
-        if self.last - self.first >= 0.999:
-            return
+    def _drag(self, event: tk.Event[tk.Misc]) -> str:
+        if not self._dragging or self.last - self.first >= 0.999:
+            return "break"
         height = max(self.winfo_height(), 1)
         visible = self.last - self.first
         thumb_height = min(height, max(26, int(visible * height)))
         travel = max(height - thumb_height, 1)
         target = (event.y - self._drag_offset) / travel
+        target = target * max(1.0 - visible, 0.0)
         target = max(0.0, min(1.0 - visible, target))
         if self._last_drag_target is not None and abs(target - self._last_drag_target) < 0.0005:
-            return
+            return "break"
         self._last_drag_target = target
         self.command("moveto", target)
+        return "break"
+
+    def _release(self, _event: tk.Event[tk.Misc]) -> str:
+        self._dragging = False
+        self._last_drag_target = None
+        return "break"
 
     def _wheel(self, event: tk.Event[tk.Misc]) -> str:
         units = -3 if event.delta > 0 else 3
@@ -1517,7 +1534,8 @@ class ControlPanel(tk.Tk):
             sashwidth=5,
             sashpad=0,
             sashrelief="flat",
-            sashcursor="sb_v_double_arrow",
+            sashcursor="arrow",
+            cursor="arrow",
             borderwidth=0,
             relief="flat",
             background=colors["background"],
@@ -1531,6 +1549,7 @@ class ControlPanel(tk.Tk):
         bottom_pane.rowconfigure(1, weight=1)
         self.main_splitter.add(settings_pane, stretch="always")
         self.main_splitter.add(bottom_pane, stretch="always")
+        self.bind_all("<Motion>", self._update_splitter_cursor, add="+")
         tab_area = ttk.Frame(settings_pane, style="App.TFrame")
         tab_area.grid(row=0, column=0, sticky="nsew")
         tab_area.columnconfigure(0, weight=1)
@@ -3123,6 +3142,22 @@ class ControlPanel(tk.Tk):
             position = int(height * 0.62)
             self.main_splitter.sash_place(0, 0, max(420, min(position, height - 240)))
         except tk.TclError:
+            return
+
+    def _update_splitter_cursor(self, _event: tk.Event[tk.Misc] | None = None) -> None:
+        """Keep the resize cursor limited to the PanedWindow sash."""
+        try:
+            splitter = self.main_splitter
+            pointer_x = splitter.winfo_pointerx() - splitter.winfo_rootx()
+            pointer_y = splitter.winfo_pointery() - splitter.winfo_rooty()
+            width = splitter.winfo_width()
+            height = splitter.winfo_height()
+            near_sash = False
+            if 0 <= pointer_x <= width and 0 <= pointer_y <= height:
+                _, sash_y = splitter.sash_coord(0)
+                near_sash = abs(pointer_y - sash_y) <= 5
+            splitter.configure(cursor="sb_v_double_arrow" if near_sash else "arrow")
+        except (tk.TclError, ValueError):
             return
 
     def _set_update_controls(self, busy: bool, checking: bool = False) -> None:
