@@ -90,6 +90,14 @@ def parse_update_manifest(payload: object) -> dict[str, str]:
         raise ValueError(f"更新类型无效：{manifest['update_type']}")
     if not manifest["target_ref"] or manifest["target_ref"].startswith("-") or any(char in manifest["target_ref"] for char in ("\n", "\r", " ")):
         raise ValueError("更新目标引用无效")
+    changelog = payload.get("changelog")
+    if isinstance(changelog, list):
+        notes = [str(item).strip() for item in changelog if str(item).strip()]
+        manifest["changelog"] = "\n".join(f"• {item}" for item in notes) or manifest["message"]
+    elif isinstance(changelog, str) and changelog.strip():
+        manifest["changelog"] = changelog.strip()
+    else:
+        manifest["changelog"] = manifest["message"]
     return manifest
 
 
@@ -334,6 +342,23 @@ NapCat WebUI 的配置路径：网络配置 → OneBot11。HTTP Server 和 HTTP 
 • “实时日志”：显示控制台和子服务输出。错误会尽量写出原因和建议；清空日志只清除画面，不会删除服务日志或记忆。
 
 通用操作顺序：先改选项 → 点击“保存配置” → 手动启动或重启受影响的服务 → 看运行状态和实时日志 → 再发送一条新的测试消息。""",
+    ),
+    (
+        "腾讯云 / 云端 Bot",
+        """控制台可以直接连接云端 Bot，但它不会替你创建腾讯云服务器或远程安装 QQ/NapCat。
+
+有两种部署方式：
+• 只把 Bot 服务放到云端：本地继续运行 QQ、NapCat 和 Bridge；本地电脑关机后不能收发 QQ 消息，但模型服务可以在云端运行。
+• 完整搬到云端：在腾讯云 Windows 服务器上同时运行 QQNT、NapCat、Bridge 和 Bot。这样本地电脑关机后也能继续收发消息，本地只需要偶尔远程桌面维护。
+
+只连接云端 Bot 时：
+1. 先在云服务器上启动 bot_service.py，并确认它监听 8765；云端 Bot Token 要和本控制台完全一致。
+2. 本地和云服务器优先加入同一个 Tailscale 或 ZeroTier 网络。本地控制台填写云服务器的 100.x.x.x 或其他虚拟局域网 IP，不要填 0.0.0.0。
+3. 也可以用 SSH 隧道把云端 8765 映射到本机端口，这时地址填 127.0.0.1 和隧道端口。
+4. 在“连接与服务”填写 Bot 服务地址、端口和 Token，点击“测试连接”。看到“云端 Bot 可用”后再保存配置。
+5. 点击“启动全部”时，控制台会自动跳过本地 Bot，只启动本地 Bridge；“停止全部”也不会停止云服务器上的 Bot。
+
+注意：当前 Bot 服务地址字段只接受主机名或 IP，不接受 http://、路径或 /reply。公网直连不建议直接开放 8765；应使用安全组限制来源，或使用 Tailscale/ZeroTier/SSH 隧道。完整部署步骤请看项目里的 deploy/tencent-cloud/README.md。""",
     ),
     (
         "主动消息",
@@ -1119,12 +1144,15 @@ class ControlPanel(tk.Tk):
         self._model_detection_jobs: dict[str, str | None] = {"chat": None, "vision": None}
         self._diagnostics_generation = 0
         self._diagnostics_timeout_job: str | None = None
+        self._bot_probe_in_flight = False
         self._update_busy = False
+        self._startup_update_check_pending = True
         self._required_update = False
         self._build_ui()
         self.after_idle(self._set_default_splitter_position)
         self.after(200, self._drain_logs)
         self.after(1000, self._refresh_status)
+        self.after(1500, self._check_for_required_update_on_start)
         self.protocol("WM_DELETE_WINDOW", self._close)
 
     @staticmethod
@@ -1648,6 +1676,7 @@ class ControlPanel(tk.Tk):
         network.pack(fill="x", pady=(10, 0))
         network.columnconfigure(1, weight=1)
         network.columnconfigure(3, weight=1)
+        network.columnconfigure(4, weight=0)
         self.napcat_url = self._entry(network, 0, "NapCat API", "NAPCAT_API_URL", DEFAULT_NAPCAT_API_URL)
         self.napcat_access = self._entry(network, 1, "NapCat Access Token", "NAPCAT_ACCESS_TOKEN", secret=True)
         self.event_token = self._entry(network, 2, "HTTP Client Token（事件上报）", "NAPCAT_EVENT_TOKEN", secret=True)
@@ -1656,6 +1685,15 @@ class ControlPanel(tk.Tk):
         self.bridge_port = self._entry(network, 4, "Bridge 端口", "BRIDGE_PORT", "8766")
         self.bot_host = self._entry(network, 4, "Bot 服务地址", "BOT_SERVICE_HOST", "127.0.0.1", column=2)
         self.bot_port = self._entry(network, 5, "Bot 端口", "BOT_SERVICE_PORT", "8765")
+        bot_actions = ttk.Frame(network, style="Surface.TFrame")
+        bot_actions.grid(row=5, column=2, columnspan=3, sticky="w", padx=(0, 0), pady=5)
+        self.bot_probe_button = ttk.Button(bot_actions, text="测试连接", command=self.test_bot_connection)
+        self.bot_probe_button.pack(side="left")
+        ttk.Button(bot_actions, text="云端设置", command=self.open_cloud_bot_dialog).pack(side="left", padx=(8, 0))
+        self.bot_target_hint = ttk.Label(bot_actions, text="", style="Hint.TLabel", wraplength=300)
+        self.bot_target_hint.pack(side="left", padx=(12, 0))
+        self.bot_host.trace_add("write", lambda *_args: self._refresh_bot_target_hint())
+        self._refresh_bot_target_hint()
         self.napcat_boot = self._entry(network, 6, "NapCat 启动程序", "NAPCAT_BOOT")
         self.napcat_qq = self._entry(network, 7, "QQ 程序", "NAPCAT_QQ")
         self.napcat_hook = self._entry(network, 8, "NapCat Hook", "NAPCAT_HOOK")
@@ -2313,6 +2351,9 @@ class ControlPanel(tk.Tk):
         button.state(["!disabled"])
 
     def start_all(self) -> None:
+        if self._startup_update_check_pending:
+            self._append_log("正在检查启动时的强制更新，请稍候；检查完成前不会启动旧版本服务")
+            return
         if self._required_update:
             message = "当前版本需要先完成强制更新，已暂时阻止启动服务"
             self._append_log(message)
@@ -2346,6 +2387,148 @@ class ControlPanel(tk.Tk):
         self.bot.stop()
         self.bridge.stop()
         self._append_log("已停止控制台启动的 Bot 和 Bridge；远程 Bot 不会被此按钮停止")
+
+    def _refresh_bot_target_hint(self) -> None:
+        """Keep the local/remote behavior visible beside the Bot endpoint."""
+        if not hasattr(self, "bot_target_hint"):
+            return
+        host = self.bot_host.get().strip() or "127.0.0.1"
+        if is_local_service_host(host):
+            self.bot_target_hint.configure(text="当前目标：本机 Bot；启动全部会尝试启动本地 bot_service.py")
+        else:
+            self.bot_target_hint.configure(text="当前目标：云端 Bot；启动全部会跳过本地 Bot，请先测试连接")
+
+    def test_bot_connection(self) -> None:
+        """Probe the configured Bot without saving or restarting anything."""
+        if self._bot_probe_in_flight:
+            return
+        host = self.bot_host.get().strip() or "127.0.0.1"
+        port = self._port_value(self.bot_port, 8765)
+        if port is None:
+            self._append_log(format_panel_error("Bot 连接测试 · 端口", "Bot 端口无效"))
+            return
+        try:
+            endpoint = service_base_url(host, port)
+        except ValueError as exc:
+            self._append_log(format_panel_error("Bot 连接测试 · 地址", exc))
+            return
+
+        self._bot_probe_in_flight = True
+        self.bot_probe_button.configure(text="测试中...")
+        self.bot_probe_button.state(["disabled"])
+        target_name = "本机 Bot" if is_local_service_host(host) else "云端 Bot"
+        self._append_log(f"正在测试 {target_name}：{endpoint}/health（不会保存配置）")
+        threading.Thread(
+            target=self._bot_connection_worker,
+            args=(endpoint, self.service_token.get().strip(), target_name),
+            daemon=True,
+        ).start()
+
+    def _bot_connection_worker(self, endpoint: str, token: str, target_name: str) -> None:
+        try:
+            service = probe_service(endpoint, token)
+        except (OSError, ValueError, HTTPError, URLError, TimeoutError) as exc:
+            self.after(0, lambda exc=exc: self._finish_bot_connection_test(target_name, exc))
+            return
+        self.after(0, lambda service=service: self._finish_bot_connection_test(target_name, None, service))
+
+    def _finish_bot_connection_test(self, target_name: str, error: BaseException | None, service: str = "ok") -> None:
+        self._bot_probe_in_flight = False
+        if not self.winfo_exists():
+            return
+        self.bot_probe_button.configure(text="测试连接")
+        self.bot_probe_button.state(["!disabled"])
+        if error is not None:
+            self._append_log(format_panel_error(f"{target_name} 连接测试", error))
+            return
+        self._append_log(f"{target_name} 可用：{service}，Token 和地址校验通过")
+
+    def open_cloud_bot_dialog(self) -> None:
+        """Offer a small guided editor for a remote Bot endpoint."""
+        existing = getattr(self, "_cloud_bot_window", None)
+        if existing is not None and existing.winfo_exists():
+            existing.deiconify()
+            existing.lift()
+            return
+
+        window = tk.Toplevel(self)
+        self._cloud_bot_window = window
+        if self._icon_image is not None:
+            window.iconphoto(True, self._icon_image)
+        if ICON_ICO_PATH.is_file():
+            try:
+                window.iconbitmap(default=str(ICON_ICO_PATH))
+            except tk.TclError:
+                pass
+        window.title("云端 Bot 设置")
+        window.geometry("640x430")
+        window.minsize(560, 380)
+        window.configure(background=self.COLORS["background"])
+        window.columnconfigure(0, weight=1)
+        window.rowconfigure(1, weight=1)
+
+        header = ttk.Frame(window, style="App.TFrame", padding=(22, 18, 22, 8))
+        header.grid(row=0, column=0, sticky="ew")
+        ttk.Label(header, text="云端 Bot 设置", style="Title.TLabel").pack(anchor="w")
+        ttk.Label(
+            header,
+            text="把 Bot 服务放到腾讯云或其他服务器时，在这里填写连接信息。保存配置和重启仍由你手动触发。",
+            style="Subtitle.TLabel",
+            wraplength=570,
+        ).pack(anchor="w", pady=(4, 0))
+
+        body = ttk.Frame(window, style="Surface.TFrame", padding=22)
+        body.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 10))
+        body.columnconfigure(1, weight=1)
+        host = tk.StringVar(value=self.bot_host.get().strip())
+        port = tk.StringVar(value=self.bot_port.get().strip() or "8765")
+        token = tk.StringVar(value=self.service_token.get().strip())
+        ttk.Label(body, text="服务器地址", style="Form.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 12), pady=6)
+        ttk.Entry(body, textvariable=host).grid(row=0, column=1, sticky="ew", pady=6)
+        ttk.Label(body, text="端口", style="Form.TLabel").grid(row=1, column=0, sticky="w", padx=(0, 12), pady=6)
+        ttk.Entry(body, textvariable=port, width=12).grid(row=1, column=1, sticky="w", pady=6)
+        ttk.Label(body, text="Bot 服务 Token", style="Form.TLabel").grid(row=2, column=0, sticky="w", padx=(0, 12), pady=6)
+        ttk.Entry(body, textvariable=token, show="*").grid(row=2, column=1, sticky="ew", pady=6)
+        ttk.Label(
+            body,
+            text="建议使用 Tailscale / ZeroTier 私网地址。不要填 0.0.0.0，也不要把 http:// 或 /reply 写进地址。云端 Token 必须和这里完全一致。",
+            style="Hint.TLabel",
+            wraplength=520,
+            justify="left",
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(10, 6))
+        ttk.Label(
+            body,
+            text="这里只配置连接，不会创建云服务器。若希望电脑关机后 QQ 仍在线，需要在腾讯云 Windows 服务器上运行 QQNT、NapCat、Bridge 和 Bot。",
+            style="Hint.TLabel",
+            wraplength=520,
+            justify="left",
+        ).grid(row=4, column=0, columnspan=2, sticky="w", pady=(0, 6))
+
+        footer = ttk.Frame(window, style="Command.TFrame", padding=(16, 10))
+        footer.grid(row=2, column=0, sticky="ew")
+        ttk.Button(footer, text="改回本机", command=lambda: (host.set("127.0.0.1"), port.set("8765"))).pack(side="left")
+
+        def apply_remote() -> None:
+            raw_host = host.get().strip()
+            raw_port = parse_port(port.get(), 8765)
+            if raw_port is None:
+                messagebox.showwarning("云端配置无效", "端口必须是 1 到 65535 之间的数字。", parent=window)
+                return
+            try:
+                service_base_url(raw_host or "127.0.0.1", raw_port)
+            except ValueError as exc:
+                messagebox.showwarning("云端配置无效", str(exc), parent=window)
+                return
+            self.bot_host.set(raw_host or "127.0.0.1")
+            self.bot_port.set(str(raw_port))
+            self.service_token.set(token.get().strip())
+            self._refresh_bot_target_hint()
+            self._append_log("已应用 Bot 连接信息到当前页面；尚未保存，也未重启服务")
+            window.destroy()
+
+        ttk.Button(footer, text="取消", command=window.destroy).pack(side="right")
+        ttk.Button(footer, text="应用到当前配置", command=apply_remote, style="Primary.TButton").pack(side="right", padx=(0, 8))
+        window.protocol("WM_DELETE_WINDOW", window.destroy)
 
     @staticmethod
     def _port_value(variable: tk.StringVar, default: int) -> int | None:
@@ -2933,7 +3116,7 @@ class ControlPanel(tk.Tk):
                 self.after(100, self._set_default_splitter_position)
                 return
             position = int(height * 0.68)
-            self.main_splitter.sashpos(0, max(360, min(position, height - 250)))
+            self.main_splitter.sash_place(0, 0, max(360, min(position, height - 250)))
         except tk.TclError:
             return
 
@@ -2997,6 +3180,8 @@ class ControlPanel(tk.Tk):
     def check_updates(self) -> None:
         if self._update_busy:
             return
+        # A manual check takes over the startup check if the user clicks first.
+        self._startup_update_check_pending = False
         if not (ROOT / ".git").is_dir():
             message = "当前目录不是 Git 克隆目录，控制台无法在线更新；请首次用 git clone 下载项目。"
             self._append_log(message)
@@ -3004,7 +3189,18 @@ class ControlPanel(tk.Tk):
             return
         self._set_update_controls(True, checking=True)
         self._append_log("正在检查项目更新：不会修改本地文件，也不会重启服务")
-        threading.Thread(target=self._update_worker, args=(False,), daemon=True).start()
+        threading.Thread(target=self._update_worker, args=(False, False), daemon=True).start()
+
+    def _check_for_required_update_on_start(self) -> None:
+        """Check quietly at startup and interrupt only for a required update."""
+        if not self._startup_update_check_pending or self._update_busy:
+            return
+        if not (ROOT / ".git").is_dir():
+            self._startup_update_check_pending = False
+            return
+        self._set_update_controls(True, checking=True)
+        self._append_log("正在检查强制更新：普通更新不会在启动时打断你")
+        threading.Thread(target=self._update_worker, args=(False, True), daemon=True).start()
 
     def _start_project_update(self) -> None:
         if self._update_busy:
@@ -3016,20 +3212,20 @@ class ControlPanel(tk.Tk):
             return
         self._set_update_controls(True)
         self._append_log("正在更新项目：先检查本地改动，再获取远程代码")
-        threading.Thread(target=self._update_worker, args=(True,), daemon=True).start()
+        threading.Thread(target=self._update_worker, args=(True, False), daemon=True).start()
 
-    def _update_worker(self, apply_update: bool) -> None:
+    def _update_worker(self, apply_update: bool, startup_check: bool = False) -> None:
         try:
             manifest = self._fetch_update_manifest()
             available, summary = self._release_state(manifest)
             local_changes = self._git_update_snapshot()
             if not available:
-                self.after(0, lambda summary=summary: self._update_finished(summary, False, None))
+                self.after(0, lambda summary=summary: self._update_finished(summary, False, None, startup_check))
                 return
             if not apply_update:
                 if local_changes:
                     summary += "；当前目录有本地代码改动，更新前需要先处理"
-                self.after(0, lambda summary=summary, manifest=manifest: self._update_finished(summary, False, manifest))
+                self.after(0, lambda summary=summary, manifest=manifest: self._update_finished(summary, False, manifest, startup_check))
                 return
             if local_changes:
                 raise RuntimeError(
@@ -3046,19 +3242,104 @@ class ControlPanel(tk.Tk):
                 detail = git_output_tail(merge.stdout) or f"Git 返回码 {merge.returncode}"
                 raise RuntimeError(f"稳定版本更新失败（备份已保存到 {backup}）：{detail}")
             message = f"已更新到 v{manifest['version']}（{manifest['update_type']}），更新前备份已保存到 {backup}。"
-            self.after(0, lambda message=message, manifest=manifest: self._update_finished(message, False, manifest))
+            self.after(0, lambda message=message, manifest=manifest: self._update_finished(message, False, manifest, startup_check))
         except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
             if isinstance(exc, subprocess.TimeoutExpired):
                 detail = "Git 操作超时，请检查网络或代理后重试。"
             else:
                 detail = str(exc)
-            self.after(0, lambda detail=detail: self._update_finished(f"项目更新失败：{detail}", True, None))
+            self.after(0, lambda detail=detail: self._update_finished(f"项目更新失败：{detail}", True, None, startup_check))
 
-    def _update_finished(self, message: str, failed: bool, manifest: dict[str, str] | None) -> None:
+    def _show_update_dialog(self, manifest: dict[str, str], *, force: bool) -> bool:
+        """Show release notes and return whether the user chose to update."""
+        window = tk.Toplevel(self)
+        window.title("需要更新" if force else "发现项目更新")
+        window.geometry("660x480")
+        window.minsize(560, 400)
+        window.transient(self)
+        window.configure(background=self.COLORS["background"])
+        window.columnconfigure(0, weight=1)
+        window.rowconfigure(1, weight=1)
+        if self._icon_image is not None:
+            window.iconphoto(True, self._icon_image)
+        if ICON_ICO_PATH.is_file():
+            try:
+                window.iconbitmap(default=str(ICON_ICO_PATH))
+            except tk.TclError:
+                pass
+
+        update_type = {"hot": "热更新", "normal": "普通更新", "force": "强制更新"}[manifest["update_type"]]
+        header = ttk.Frame(window, style="App.TFrame", padding=(22, 18, 22, 10))
+        header.grid(row=0, column=0, sticky="ew")
+        ttk.Label(header, text=f"发现 v{manifest['version']} · {update_type}", style="Title.TLabel").pack(anchor="w")
+        ttk.Label(
+            header,
+            text=f"当前版本 v{__version__} → v{manifest['version']}    更新目标：{manifest['target_ref']}",
+            style="Subtitle.TLabel",
+        ).pack(anchor="w", pady=(4, 0))
+
+        body = ttk.Frame(window, style="Surface.TFrame", padding=(22, 0, 22, 12))
+        body.grid(row=1, column=0, sticky="nsew")
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(1, weight=1)
+        ttk.Label(body, text="版本更新日志", style="Section.TLabelframe.Label").grid(row=0, column=0, sticky="w", pady=(0, 8))
+        notes = tk.Text(
+            body,
+            height=10,
+            wrap="word",
+            state="normal",
+            background=self.COLORS["input"],
+            foreground=self.COLORS["text"],
+            insertbackground=self.COLORS["accent"],
+            relief="flat",
+            borderwidth=0,
+            padx=12,
+            pady=10,
+            font=("Microsoft YaHei UI", 10),
+        )
+        notes.grid(row=1, column=0, sticky="nsew")
+        notes.insert("1.0", manifest.get("changelog", manifest["message"]))
+        notes.configure(state="disabled")
+
+        footer = ttk.Frame(window, style="Command.TFrame", padding=(18, 12))
+        footer.grid(row=2, column=0, sticky="ew")
+        result = {"update": False}
+
+        def start_update() -> None:
+            result["update"] = True
+            window.destroy()
+
+        def cancel() -> None:
+            if force:
+                self._append_log("强制更新仍未完成；服务启动会继续被拦截")
+                return
+            window.destroy()
+
+        if force:
+            ttk.Label(footer, text="这是强制更新，必须完成更新后才能启动服务。", style="Hint.TLabel").pack(side="left")
+        else:
+            ttk.Label(footer, text="更新前会自动备份当前配置和 Persona。", style="Hint.TLabel").pack(side="left")
+            ttk.Button(footer, text="取消", command=cancel).pack(side="right")
+        ttk.Button(footer, text="立即更新", command=start_update, style="Primary.TButton").pack(side="right", padx=(0, 8))
+        window.protocol("WM_DELETE_WINDOW", cancel)
+        window.grab_set()
+        self.wait_window(window)
+        return result["update"]
+
+    def _update_finished(
+        self,
+        message: str,
+        failed: bool,
+        manifest: dict[str, str] | None,
+        startup_check: bool = False,
+    ) -> None:
+        if startup_check:
+            self._startup_update_check_pending = False
         self._set_update_controls(False)
         self._append_log(message)
         if failed:
-            messagebox.showwarning("项目更新失败", message, parent=self)
+            if not startup_check:
+                messagebox.showwarning("项目更新失败", message, parent=self)
             return
         if not manifest:
             return
@@ -3067,13 +3348,11 @@ class ControlPanel(tk.Tk):
             if update_type == "force":
                 self._required_update = True
                 self._append_log("这是强制更新：启动服务前必须先完成更新")
-            prompt = f"{message}\n\n现在更新项目吗？"
-            if update_type == "force":
-                prompt += "\n这是强制更新，不更新将无法启动服务。"
-            if messagebox.askyesno("发现项目更新", prompt, parent=self):
+            if startup_check and update_type != "force":
+                self._append_log(f"发现 {update_type} v{manifest['version']}；如需查看日志并更新，请点击右上角“检查更新”")
+                return
+            if self._show_update_dialog(manifest, force=update_type == "force"):
                 self._start_project_update()
-            elif update_type == "force":
-                messagebox.showwarning("需要更新", "当前版本不再兼容，请在“检查更新”后选择立即更新。", parent=self)
             return
         if update_type == "force" and message.startswith("已更新到"):
             self._required_update = False

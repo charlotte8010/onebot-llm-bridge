@@ -36,8 +36,10 @@ class ControlPanelHelperTests(unittest.TestCase):
             "target_ref": "v0.2.0",
             "min_version": "0.1.0",
             "message": "服务重启优化",
+            "changelog": ["服务重启优化", "补充更新说明"],
         })
         self.assertEqual(manifest["target_ref"], "v0.2.0")
+        self.assertEqual(manifest["changelog"], "• 服务重启优化\n• 补充更新说明")
         self.assertEqual(parse_release_version("v1.2.3"), (1, 2, 3))
         with self.assertRaises(ValueError):
             parse_update_manifest({"version": "0.2", "update_type": "force", "target_ref": "v0.2", "min_version": "0.1.0", "message": ""})
@@ -142,6 +144,7 @@ class ControlPanelHelperTests(unittest.TestCase):
         self.assertIn("第一次启动", titles)
         self.assertIn("配置 Supabase", titles)
         self.assertIn("控制台小功能", titles)
+        self.assertIn("腾讯云 / 云端 Bot", titles)
 
     def test_help_explains_persona_editor_and_save_restart_flow(self):
         content = dict(HELP_SECTIONS)["Persona、记忆与词典"]
@@ -160,6 +163,12 @@ class ControlPanelHelperTests(unittest.TestCase):
     def test_remote_bot_help_explains_private_or_tailscale_address(self):
         self.assertIn("Tailscale", HELP_TEXTS["BOT_SERVICE_HOST"])
         self.assertIn("不要填 http://", HELP_TEXTS["BOT_SERVICE_HOST"])
+
+    def test_cloud_bot_help_explains_local_and_full_cloud_deployment(self):
+        content = dict(HELP_SECTIONS)["腾讯云 / 云端 Bot"]
+        self.assertIn("不会替你创建腾讯云服务器", content)
+        self.assertIn("完整搬到云端", content)
+        self.assertIn("跳过本地 Bot", content)
 
     def test_allowlist_help_distinguishes_group_list_and_active_target(self):
         self.assertIn("半角逗号", HELP_TEXTS["GROUP_ALLOWLIST"])
