@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from control_panel import HELP_SECTIONS, HELP_TEXTS, OPTION_LABELS, ControlPanel, build_napcat_command, build_napcat_nt_command, build_napcat_utf8_console_command, discover_qq_executable, format_panel_error, generate_service_token, is_local_service_host, local_url_port, load_env_file, load_theme, parse_port, parse_model_ids, probe_models, save_env_file, save_theme, service_base_url, vision_status
+from control_panel import HELP_SECTIONS, HELP_TEXTS, OPTION_LABELS, ControlPanel, build_napcat_command, build_napcat_nt_command, build_napcat_utf8_console_command, discover_qq_executable, format_panel_error, generate_service_token, git_output_tail, is_local_service_host, local_url_port, load_env_file, load_theme, parse_git_ahead_behind, parse_port, parse_model_ids, probe_models, save_env_file, save_theme, service_base_url, vision_status
 
 
 class ControlPanelHelperTests(unittest.TestCase):
@@ -22,6 +22,12 @@ class ControlPanelHelperTests(unittest.TestCase):
         )
         self.assertEqual(parse_model_ids({"data": []}), [])
         self.assertEqual(parse_model_ids({"models": []}), [])
+
+    def test_git_ahead_behind_parser_and_output_tail(self):
+        self.assertEqual(parse_git_ahead_behind("2\t5\n"), (2, 5))
+        self.assertEqual(git_output_tail("one\ntwo\nthree\nfour\n", limit=2), "three；four")
+        with self.assertRaises(ValueError):
+            parse_git_ahead_behind("not git output")
 
     def test_ports_are_validated_without_touching_tk(self):
         self.assertEqual(parse_port("", 8765), 8765)

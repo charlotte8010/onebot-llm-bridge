@@ -32,6 +32,35 @@ DEFAULT_NAPCAT_API_URL = "http://127.0.0.1:3000"
 DEFAULT_WINDOW_GEOMETRY = "1180x980"
 
 
+def run_git_command(*args: str, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
+    """Run a git command in this checkout without invoking a shell."""
+    return subprocess.run(
+        ["git", *args],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+        check=False,
+    )
+
+
+def parse_git_ahead_behind(output: str) -> tuple[int, int]:
+    """Parse ``git rev-list --left-right --count`` output."""
+    parts = output.split()
+    if len(parts) != 2 or any(not part.isdigit() for part in parts):
+        raise ValueError(f"无法解析 Git 提交差异：{output.strip() or '<empty>'}")
+    return int(parts[0]), int(parts[1])
+
+
+def git_output_tail(output: str, limit: int = 3) -> str:
+    """Keep update errors readable without dumping a whole Git trace into the UI."""
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    return "；".join(lines[-limit:])
+
+
 def vision_status(mode: str, model: str) -> tuple[str, bool]:
     """Return a user-facing vision status and whether its configuration is ready."""
     normalized_mode = mode.strip().lower()
@@ -917,6 +946,7 @@ class ControlPanel(tk.Tk):
         self._model_detection_jobs: dict[str, str | None] = {"chat": None, "vision": None}
         self._diagnostics_generation = 0
         self._diagnostics_timeout_job: str | None = None
+        self._update_busy = False
         self._build_ui()
         self.after(200, self._drain_logs)
         self.after(1000, self._refresh_status)
@@ -1221,6 +1251,10 @@ class ControlPanel(tk.Tk):
         ttk.Button(primary_actions, text="恢复配置", command=self.restore_config).pack(side="left", padx=(8, 0))
         secondary_actions = ttk.Frame(actions, style="Command.TFrame")
         secondary_actions.grid(row=0, column=1, sticky="e")
+        self.update_check_button = ttk.Button(secondary_actions, text="检查更新", command=self.check_updates)
+        self.update_check_button.pack(side="left")
+        self.update_button = ttk.Button(secondary_actions, text="更新项目", command=self.update_project)
+        self.update_button.pack(side="left", padx=(8, 0))
         ttk.Button(secondary_actions, text="重启全部", command=self.restart_all).pack(side="left")
         ttk.Button(secondary_actions, text="停止全部", command=self.stop_all, style="Danger.TButton").pack(side="left", padx=(8, 0))
         actions.columnconfigure(1, weight=1)
@@ -2590,6 +2624,125 @@ class ControlPanel(tk.Tk):
         self.log.insert("end", message + "\n")
         self.log.see("end")
         self.log.configure(state="disabled")
+
+    def _set_update_controls(self, busy: bool, checking: bool = False) -> None:
+        self._update_busy = busy
+        self.update_check_button.configure(text="检查中..." if checking else "检查更新")
+        self.update_button.configure(text="更新中..." if busy and not checking else "更新项目")
+        state = ["disabled"] if busy else ["!disabled"]
+        self.update_check_button.state(state)
+        self.update_button.state(state)
+
+    def _project_branch(self) -> str:
+        result = run_git_command("branch", "--show-current")
+        if result.returncode != 0:
+            detail = git_output_tail(result.stdout) or f"Git 返回码 {result.returncode}"
+            raise RuntimeError(detail)
+        branch = result.stdout.strip()
+        if not branch:
+            raise RuntimeError("当前处于 detached HEAD，无法安全判断要更新的分支")
+        return branch
+
+    def _git_update_snapshot(self, branch: str) -> tuple[str, bool, int, int]:
+        status = run_git_command("status", "--porcelain", "--untracked-files=all")
+        if status.returncode != 0:
+            detail = git_output_tail(status.stdout) or f"Git 返回码 {status.returncode}"
+            raise RuntimeError(detail)
+        local_changes = bool(status.stdout.strip())
+        comparison = run_git_command("rev-list", "--left-right", "--count", f"HEAD...origin/{branch}")
+        if comparison.returncode != 0:
+            detail = git_output_tail(comparison.stdout) or f"Git 返回码 {comparison.returncode}"
+            raise RuntimeError(detail)
+        local_only, remote_only = parse_git_ahead_behind(comparison.stdout)
+        return branch, local_changes, local_only, remote_only
+
+    def check_updates(self) -> None:
+        if self._update_busy:
+            return
+        if not (ROOT / ".git").is_dir():
+            message = "当前目录不是 Git 克隆目录，控制台无法在线更新；请首次用 git clone 下载项目。"
+            self._append_log(message)
+            messagebox.showwarning("无法检查更新", message, parent=self)
+            return
+        self._set_update_controls(True, checking=True)
+        self._append_log("正在检查项目更新：不会修改本地文件，也不会重启服务")
+        threading.Thread(target=self._update_worker, args=(False,), daemon=True).start()
+
+    def update_project(self) -> None:
+        if self._update_busy:
+            return
+        if not (ROOT / ".git").is_dir():
+            message = "当前目录不是 Git 克隆目录，不能通过控制台更新；请首次用 git clone 下载项目。"
+            self._append_log(message)
+            messagebox.showwarning("无法更新项目", message, parent=self)
+            return
+        if not messagebox.askyesno(
+            "更新项目",
+            "将从 GitHub 获取最新代码，并且只允许快进更新。\n\n"
+            "不会覆盖 .env.local、Persona、词典、SQLite 记忆。\n"
+            "如果发现本地代码改动，更新会自动停止。更新完成后需要手动重启服务；控制台代码变化时还要重新打开控制台。\n\n"
+            "现在更新吗？",
+            parent=self,
+        ):
+            return
+        self._set_update_controls(True)
+        self._append_log("正在更新项目：先检查本地改动，再获取远程代码")
+        threading.Thread(target=self._update_worker, args=(True,), daemon=True).start()
+
+    def _update_worker(self, apply_update: bool) -> None:
+        try:
+            branch = self._project_branch()
+            _, local_changes, local_only, remote_only = self._git_update_snapshot(branch)
+            if apply_update and local_changes:
+                raise RuntimeError(
+                    "检测到本地代码改动，已停止更新。请先提交/暂存这些改动，或确认它们不需要保留后再更新；控制台不会替你删除或覆盖。"
+                )
+            fetch = run_git_command("fetch", "origin", branch, timeout=90)
+            if fetch.returncode != 0:
+                detail = git_output_tail(fetch.stdout) or f"Git 返回码 {fetch.returncode}"
+                raise RuntimeError(f"获取 origin/{branch} 失败：{detail}")
+            _, local_changes, local_only, remote_only = self._git_update_snapshot(branch)
+            if not apply_update:
+                if remote_only == 0 and local_only == 0:
+                    message = "项目已是最新。"
+                else:
+                    message = f"发现远程新增 {remote_only} 个提交；本地未推送提交 {local_only} 个。"
+                    if local_changes:
+                        message += " 当前目录有本地改动，正式更新前需要先处理。"
+                    elif local_only:
+                        message += " 本地存在未推送提交，无法保证快进更新。"
+                self.after(0, lambda message=message: self._update_finished(message, False))
+                return
+            if local_changes:
+                raise RuntimeError(
+                    "检查远程后发现本地代码改动，已停止更新。请先处理工作区，再重新点击更新项目。"
+                )
+            if local_only:
+                raise RuntimeError("本地存在未推送提交，无法执行快进更新；请先处理当前分支。")
+            if remote_only == 0:
+                message = "项目已是最新，没有需要更新的提交。"
+            else:
+                merge = run_git_command("merge", "--ff-only", f"origin/{branch}", timeout=60)
+                if merge.returncode != 0:
+                    detail = git_output_tail(merge.stdout) or f"Git 返回码 {merge.returncode}"
+                    raise RuntimeError(f"快进更新失败：{detail}")
+                message = (
+                    f"项目已更新，快进了 {remote_only} 个提交。"
+                    "请点击“重启全部”让 Bot/Bridge 载入新代码；如果控制台代码也更新，请关闭后重新打开控制台。"
+                )
+            self.after(0, lambda message=message: self._update_finished(message, False))
+        except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
+            if isinstance(exc, subprocess.TimeoutExpired):
+                detail = "Git 操作超时，请检查网络或代理后重试。"
+            else:
+                detail = str(exc)
+            self.after(0, lambda detail=detail: self._update_finished(f"项目更新失败：{detail}", True))
+
+    def _update_finished(self, message: str, failed: bool) -> None:
+        self._set_update_controls(False)
+        self._append_log(message)
+        if failed:
+            messagebox.showwarning("项目更新失败", message, parent=self)
 
     def clear_log(self) -> None:
         self.log.configure(state="normal")

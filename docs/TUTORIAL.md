@@ -396,17 +396,31 @@ GROUP_ALLOWLIST=你的测试群号
 
 ## 11. 如何更新项目
 
-更新前：
+如果项目是用 `git clone` 下载的，现在可以直接在控制台顶部点击“检查更新”，确认远程提交数量后，再点击“更新项目”。控制台会：
+
+1. 只检查当前 Git 分支和 `origin` 远程仓库。
+2. 先检查工作区；有本地代码改动、未推送提交或不是 Git 克隆目录时，会停止，不会替你删除文件。
+3. 只执行快进更新，不会制造合并提交，也不会覆盖 `.env.local`、Persona、词典和 SQLite 记忆。
+4. 更新完成后不自动重启。点击“重启全部”让 Bot/Bridge 读取新代码；如果控制台本身也更新了，再关闭并重新打开控制台。
+
+更新前仍建议：
 
 1. 记录当前 `.env.local` 和本地数据位置。
 2. 停止 Bridge 和 Bot service。
 3. 保留 NapCat 是否运行取决于更新内容；只改 Python 时通常不必退出 QQ。
 
-更新后：
+如果是下载的 ZIP，目录里没有 `.git`，控制台无法知道它对应哪个版本，也不会直接覆盖整个目录。此时首次安装请使用：
+
+```powershell
+git clone https://github.com/charlotte8010/onebot-llm-bridge.git
+cd onebot-llm-bridge
+python -m unittest discover -q
+```
+
+没有控制台时，也可以手动更新 Git 克隆：
 
 ```powershell
 git pull --ff-only origin main
-python -m unittest discover -q
 ```
 
 如果端口已经被旧进程占用，先确认旧进程是否还在，再启动新版本。不要同时运行两个 Bridge，否则同一条消息可能被回复两次。
