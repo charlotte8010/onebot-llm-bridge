@@ -308,6 +308,59 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(napcat.sent, [("private", "123", "只回一次")])
 
+    def test_repeated_user_auto_reply_is_handled_once(self):
+        settings = self.settings()
+        napcat = FakeNapCat()
+        calls = []
+        bridge = Bridge(
+            settings,
+            napcat=napcat,
+            bot_request=lambda payload: calls.append(payload) or {"bubbles": ["收到"]},
+        )
+        first = {
+            "post_type": "message",
+            "message_type": "private",
+            "user_id": 123,
+            "message_id": 101,
+            "message": "我现在有事不在，一会再联系",
+        }
+        second = {
+            **first,
+            "message_id": 102,
+            "message": "暂时无法回复，稍后联系",
+        }
+        self.assertTrue(bridge.handle_event(first)["handled"])
+        result = bridge.handle_event(second)
+        bridge.shutdown()
+        self.assertFalse(result["handled"])
+        self.assertEqual(result["reason"], "repeated_auto_reply")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(napcat.sent, [("private", "123", "收到")])
+
+    def test_auto_reply_event_subtype_is_handled_once(self):
+        settings = self.settings()
+        napcat = FakeNapCat()
+        bridge = Bridge(
+            settings,
+            napcat=napcat,
+            bot_request=lambda _payload: {"bubbles": ["好"]},
+        )
+        first = {
+            "post_type": "message",
+            "message_type": "private",
+            "user_id": 123,
+            "message_id": 201,
+            "sub_type": "auto_reply",
+            "message": "你好",
+        }
+        second = {**first, "message_id": 202}
+        self.assertTrue(bridge.handle_event(first)["handled"])
+        result = bridge.handle_event(second)
+        bridge.shutdown()
+        self.assertFalse(result["handled"])
+        self.assertEqual(result["reason"], "repeated_auto_reply")
+        self.assertEqual(napcat.sent, [("private", "123", "好")])
+
     def test_failed_coordinated_batch_releases_remote_lease(self):
         class FakeLeaseMemory:
             def __init__(self):

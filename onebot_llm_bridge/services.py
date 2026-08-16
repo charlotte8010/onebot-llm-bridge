@@ -511,7 +511,20 @@ class Bridge:
     MAX_BATCH_MESSAGES = 20
     REMOTE_CACHE_SECONDS = 8.0
     EVENT_DEDUPE_SECONDS = 300.0
+    AUTO_REPLY_COOLDOWN_SECONDS = 300.0
     MAX_SEEN_EVENTS = 4096
+    AUTO_REPLY_MARKERS = (
+        "自动回复",
+        "自动回覆",
+        "暂时不在",
+        "暂时无法回复",
+        "现在不方便",
+        "有事不在",
+        "稍后回复",
+        "稍后联系",
+        "一会再联系",
+        "一会儿再联系",
+    )
     def __init__(
         self,
         settings: Settings,
@@ -568,6 +581,7 @@ class Bridge:
         self._active_timers: dict[str, threading.Timer] = {}
         self._summary_timers: dict[str, threading.Timer] = {}
         self._seen_events: OrderedDict[str, float] = OrderedDict()
+        self._auto_reply_seen: OrderedDict[str, float] = OrderedDict()
         self._metrics_lock = threading.Lock()
         self._metrics: dict[str, int | float] = {
             "events_received": 0,
@@ -638,6 +652,35 @@ class Bridge:
             self._seen_events.move_to_end(key)
             while len(self._seen_events) > self.MAX_SEEN_EVENTS:
                 self._seen_events.popitem(last=False)
+        return False
+
+    def _looks_like_auto_reply(self, message: NormalizedMessage) -> bool:
+        subtype = str(message.raw.get("sub_type", "")).strip().lower()
+        if subtype in {"auto_reply", "auto-reply", "automatic_reply"}:
+            return True
+        text = message.text.lower()
+        return any(marker in text for marker in self.AUTO_REPLY_MARKERS)
+
+    def _is_repeated_auto_reply(self, message: NormalizedMessage) -> bool:
+        """Allow one answer to a user's auto-reply burst, then suppress the rest."""
+        if not self._looks_like_auto_reply(message):
+            return False
+        key = f"{message.conversation_key}:{message.sender_id}"
+        now = time.monotonic()
+        with self._state_lock:
+            while self._auto_reply_seen:
+                oldest_key, seen_at = next(iter(self._auto_reply_seen.items()))
+                if now - seen_at < self.AUTO_REPLY_COOLDOWN_SECONDS:
+                    break
+                self._auto_reply_seen.pop(oldest_key, None)
+            seen_at = self._auto_reply_seen.get(key)
+            if seen_at is not None and now - seen_at < self.AUTO_REPLY_COOLDOWN_SECONDS:
+                self._auto_reply_seen.move_to_end(key)
+                return True
+            self._auto_reply_seen[key] = now
+            self._auto_reply_seen.move_to_end(key)
+            while len(self._auto_reply_seen) > self.MAX_SEEN_EVENTS:
+                self._auto_reply_seen.popitem(last=False)
         return False
 
     def _release_remote_lease_after_error(self, conversation_key: str) -> None:
@@ -1095,6 +1138,9 @@ class Bridge:
         if self._is_duplicate_event(message):
             self._metric("events_ignored")
             return {"handled": False, "reason": "duplicate_event"}
+        if self._is_repeated_auto_reply(message):
+            self._metric("events_ignored")
+            return {"handled": False, "reason": "repeated_auto_reply"}
         self._metric("events_received")
         self._ingest_remote(message)
         decision = self._decision(message)
@@ -1125,6 +1171,9 @@ class Bridge:
         if self._is_duplicate_event(message):
             self._metric("events_ignored")
             return {"accepted": False, "reason": "duplicate_event"}
+        if self._is_repeated_auto_reply(message):
+            self._metric("events_ignored")
+            return {"accepted": False, "reason": "repeated_auto_reply"}
         self._ingest_remote(message)
         decision = self._decision(message)
         if not is_meaningful(message) or not decision.should_reply:
