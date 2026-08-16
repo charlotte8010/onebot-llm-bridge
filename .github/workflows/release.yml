@@ -1,0 +1,35 @@
+name: Publish release archive
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+
+      - name: Build named archive
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          archive="onebot-llm-bridge-${RELEASE_TAG}.zip"
+          git archive --format=zip --prefix="onebot-llm-bridge-${RELEASE_TAG}/" HEAD -o "$archive"
+          test -s "$archive"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          archive="onebot-llm-bridge-${RELEASE_TAG}.zip"
+          gh release create "$RELEASE_TAG" "$archive" \
+            --verify-tag \
+            --title "OneBot LLM Bridge ${RELEASE_TAG}" \
+            --generate-notes

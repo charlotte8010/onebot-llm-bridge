@@ -422,7 +422,7 @@ python -m unittest discover -q
 
 ```powershell
 git fetch origin --tags
-git merge --ff-only v0.2.0
+git merge --ff-only v0.2.1
 ```
 
 如果端口已经被旧进程占用，先确认旧进程是否还在，再启动新版本。不要同时运行两个 Bridge，否则同一条消息可能被回复两次。

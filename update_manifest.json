@@ -1,7 +1,7 @@
 {
-  "version": "0.2.0",
+  "version": "0.2.1",
   "update_type": "normal",
-  "target_ref": "v0.2.0",
+  "target_ref": "v0.2.1",
   "min_version": "0.1.0",
-  "message": "控制台支持稳定版更新，并在更新前自动备份本地配置与记忆"
+  "message": "补充带版本号的发布压缩包和稳定更新流程"
 }

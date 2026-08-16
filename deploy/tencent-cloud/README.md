@@ -156,7 +156,7 @@ Windows 云服务器可以使用项目控制台的稳定版更新；Linux 云服
 ```bash
 sudo cp -a /etc/onebot-llm-bridge/bot.env /etc/onebot-llm-bridge/bot.env.bak
 sudo -u onebot git -C /opt/onebot-llm-bridge fetch origin --tags
-sudo -u onebot git -C /opt/onebot-llm-bridge merge --ff-only v0.2.0
+sudo -u onebot git -C /opt/onebot-llm-bridge merge --ff-only v0.2.1
 sudo systemctl restart onebot-llm-bot
 sudo journalctl -u onebot-llm-bot -n 80 --no-pager
 ```
