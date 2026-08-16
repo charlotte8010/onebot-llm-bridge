@@ -3109,14 +3109,19 @@ class ControlPanel(tk.Tk):
         self.log.configure(state="disabled")
 
     def _set_default_splitter_position(self) -> None:
-        """Give the settings area more room on first launch while keeping logs visible."""
+        """Keep the log preview compact on first launch; the sash remains draggable."""
         try:
             height = self.main_splitter.winfo_height()
-            if height <= 0:
+            # Tk reports a tiny placeholder before the outer window has laid
+            # out both panes. Setting the sash during that phase gets reset
+            # by the following Configure event.
+            if height <= 300:
                 self.after(100, self._set_default_splitter_position)
                 return
-            position = int(height * 0.68)
-            self.main_splitter.sash_place(0, 0, max(360, min(position, height - 250)))
+            # Match the reference layout: settings take roughly 62%, while
+            # status and the live log keep the remaining 38% visible.
+            position = int(height * 0.62)
+            self.main_splitter.sash_place(0, 0, max(420, min(position, height - 240)))
         except tk.TclError:
             return
 
