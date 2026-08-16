@@ -151,10 +151,14 @@ ss -lntp | grep 8765
 
 ### 更新项目
 
+Windows 云服务器可以使用项目控制台的稳定版更新；Linux 云服务器先备份配置、Persona 和 SQLite，再更新到版本清单指定的 Tag：
+
 ```bash
-sudo -u onebot git -C /opt/onebot-llm-bridge pull --ff-only
+sudo cp -a /etc/onebot-llm-bridge/bot.env /etc/onebot-llm-bridge/bot.env.bak
+sudo -u onebot git -C /opt/onebot-llm-bridge fetch origin --tags
+sudo -u onebot git -C /opt/onebot-llm-bridge merge --ff-only v0.2.0
 sudo systemctl restart onebot-llm-bot
 sudo journalctl -u onebot-llm-bot -n 80 --no-pager
 ```
 
-更新前先备份 `/etc/onebot-llm-bridge/bot.env`、Persona 和 SQLite 文件。
+更新前先备份 `/etc/onebot-llm-bridge/bot.env`、Persona 和 SQLite 文件。不要直接跟随 `main`，普通开发提交不会被当成稳定更新。

@@ -18,6 +18,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from urllib.parse import urlsplit
 
+from onebot_llm_bridge import __version__
 from onebot_llm_bridge.emoji_catalog import load_emoji_catalog
 from onebot_llm_bridge.backup import create_backup, restore_backup
 
@@ -30,6 +31,8 @@ BOT_SCRIPT = ROOT / "bot_service.py"
 BRIDGE_SCRIPT = ROOT / "app.py"
 DEFAULT_NAPCAT_API_URL = "http://127.0.0.1:3000"
 DEFAULT_WINDOW_GEOMETRY = "1180x980"
+DEFAULT_UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/charlotte8010/onebot-llm-bridge/main/update_manifest.json"
+UPDATE_TYPES = {"hot", "normal", "force"}
 
 
 def run_git_command(*args: str, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
@@ -59,6 +62,32 @@ def git_output_tail(output: str, limit: int = 3) -> str:
     """Keep update errors readable without dumping a whole Git trace into the UI."""
     lines = [line.strip() for line in output.splitlines() if line.strip()]
     return "；".join(lines[-limit:])
+
+
+def parse_release_version(value: str) -> tuple[int, int, int]:
+    """Parse the simple semantic versions used by the release manifest."""
+    normalized = value.strip().lstrip("v")
+    parts = normalized.split(".")
+    if len(parts) != 3 or any(not part.isdigit() for part in parts):
+        raise ValueError(f"版本号无效：{value or '<empty>'}")
+    return tuple(int(part) for part in parts)  # type: ignore[return-value]
+
+
+def parse_update_manifest(payload: object) -> dict[str, str]:
+    """Validate the small public update manifest before using it."""
+    if not isinstance(payload, dict):
+        raise ValueError("更新清单不是 JSON 对象")
+    required = ("version", "update_type", "target_ref", "min_version", "message")
+    if any(not isinstance(payload.get(key), str) for key in required):
+        raise ValueError("更新清单缺少必要字段")
+    manifest = {key: str(payload[key]).strip() for key in required}
+    parse_release_version(manifest["version"])
+    parse_release_version(manifest["min_version"])
+    if manifest["update_type"] not in UPDATE_TYPES:
+        raise ValueError(f"更新类型无效：{manifest['update_type']}")
+    if not manifest["target_ref"] or manifest["target_ref"].startswith("-") or any(char in manifest["target_ref"] for char in ("\n", "\r", " ")):
+        raise ValueError("更新目标引用无效")
+    return manifest
 
 
 def vision_status(mode: str, model: str) -> tuple[str, bool]:
@@ -947,6 +976,7 @@ class ControlPanel(tk.Tk):
         self._diagnostics_generation = 0
         self._diagnostics_timeout_job: str | None = None
         self._update_busy = False
+        self._required_update = False
         self._build_ui()
         self.after(200, self._drain_logs)
         self.after(1000, self._refresh_status)
@@ -2018,6 +2048,11 @@ class ControlPanel(tk.Tk):
         button.state(["!disabled"])
 
     def start_all(self) -> None:
+        if self._required_update:
+            message = "当前版本需要先完成强制更新，已暂时阻止启动服务"
+            self._append_log(message)
+            messagebox.showwarning("需要更新", "检测到强制更新，请先点击“更新项目”。", parent=self)
+            return
         if not self.save_config():
             return
         env = self._environment()
@@ -2633,28 +2668,56 @@ class ControlPanel(tk.Tk):
         self.update_check_button.state(state)
         self.update_button.state(state)
 
-    def _project_branch(self) -> str:
-        result = run_git_command("branch", "--show-current")
-        if result.returncode != 0:
-            detail = git_output_tail(result.stdout) or f"Git 返回码 {result.returncode}"
-            raise RuntimeError(detail)
-        branch = result.stdout.strip()
-        if not branch:
-            raise RuntimeError("当前处于 detached HEAD，无法安全判断要更新的分支")
-        return branch
-
-    def _git_update_snapshot(self, branch: str) -> tuple[str, bool, int, int]:
+    def _git_update_snapshot(self) -> bool:
         status = run_git_command("status", "--porcelain", "--untracked-files=all")
         if status.returncode != 0:
             detail = git_output_tail(status.stdout) or f"Git 返回码 {status.returncode}"
             raise RuntimeError(detail)
         local_changes = bool(status.stdout.strip())
-        comparison = run_git_command("rev-list", "--left-right", "--count", f"HEAD...origin/{branch}")
-        if comparison.returncode != 0:
-            detail = git_output_tail(comparison.stdout) or f"Git 返回码 {comparison.returncode}"
+        head = run_git_command("rev-parse", "HEAD")
+        if head.returncode != 0:
+            detail = git_output_tail(head.stdout) or f"Git 返回码 {head.returncode}"
             raise RuntimeError(detail)
-        local_only, remote_only = parse_git_ahead_behind(comparison.stdout)
-        return branch, local_changes, local_only, remote_only
+        return local_changes
+
+    def _update_manifest_url(self) -> str:
+        configured = self._value("UPDATE_MANIFEST_URL", "").strip()
+        return configured or DEFAULT_UPDATE_MANIFEST_URL
+
+    def _fetch_update_manifest(self) -> dict[str, str]:
+        request = Request(
+            self._update_manifest_url(),
+            headers={"Accept": "application/json", "User-Agent": "OneBotLLMBridge-ControlPanel"},
+            method="GET",
+        )
+        with urlopen(request, timeout=12) as response:
+            return parse_update_manifest(json.loads(response.read().decode("utf-8")))
+
+    def _release_state(self, manifest: dict[str, str]) -> tuple[bool, str]:
+        local_version = parse_release_version(__version__)
+        remote_version = parse_release_version(manifest["version"])
+        minimum_version = parse_release_version(manifest["min_version"])
+        force_required = manifest["update_type"] == "force" and local_version < minimum_version
+        if local_version >= remote_version and not force_required:
+            return False, f"当前版本 v{__version__}，已是稳定版 v{manifest['version']}"
+        update_type = manifest["update_type"]
+        labels = {"hot": "热更新", "normal": "普通更新", "force": "强制更新"}
+        message = f"发现 v{manifest['version']}（{labels[update_type]}）：{manifest['message']}"
+        if update_type == "force":
+            message += f"；低于最低版本 v{manifest['min_version']} 的客户端必须更新"
+        return True, message
+
+    def _fetch_release_target(self, target_ref: str) -> None:
+        fetch = run_git_command("fetch", "origin", "--tags", timeout=90)
+        if fetch.returncode != 0:
+            detail = git_output_tail(fetch.stdout) or f"Git 返回码 {fetch.returncode}"
+            raise RuntimeError(f"获取稳定版本失败：{detail}")
+        target = run_git_command("rev-parse", "--verify", f"refs/tags/{target_ref}")
+        if target.returncode != 0:
+            target = run_git_command("rev-parse", "--verify", target_ref)
+        if target.returncode != 0:
+            detail = git_output_tail(target.stdout) or f"找不到 {target_ref}"
+            raise RuntimeError(f"稳定版本目标不存在：{detail}")
 
     def check_updates(self) -> None:
         if self._update_busy:
@@ -2691,58 +2754,65 @@ class ControlPanel(tk.Tk):
 
     def _update_worker(self, apply_update: bool) -> None:
         try:
-            branch = self._project_branch()
-            _, local_changes, local_only, remote_only = self._git_update_snapshot(branch)
-            if apply_update and local_changes:
-                raise RuntimeError(
-                    "检测到本地代码改动，已停止更新。请先提交/暂存这些改动，或确认它们不需要保留后再更新；控制台不会替你删除或覆盖。"
-                )
-            fetch = run_git_command("fetch", "origin", branch, timeout=90)
-            if fetch.returncode != 0:
-                detail = git_output_tail(fetch.stdout) or f"Git 返回码 {fetch.returncode}"
-                raise RuntimeError(f"获取 origin/{branch} 失败：{detail}")
-            _, local_changes, local_only, remote_only = self._git_update_snapshot(branch)
+            manifest = self._fetch_update_manifest()
+            available, summary = self._release_state(manifest)
+            local_changes = self._git_update_snapshot()
+            if not available:
+                self.after(0, lambda summary=summary: self._update_finished(summary, False, None))
+                return
             if not apply_update:
-                if remote_only == 0 and local_only == 0:
-                    message = "项目已是最新。"
-                else:
-                    message = f"发现远程新增 {remote_only} 个提交；本地未推送提交 {local_only} 个。"
-                    if local_changes:
-                        message += " 当前目录有本地改动，正式更新前需要先处理。"
-                    elif local_only:
-                        message += " 本地存在未推送提交，无法保证快进更新。"
-                self.after(0, lambda message=message: self._update_finished(message, False))
+                if local_changes:
+                    summary += "；当前目录有本地代码改动，更新前需要先处理"
+                self.after(0, lambda summary=summary, manifest=manifest: self._update_finished(summary, False, manifest))
                 return
             if local_changes:
                 raise RuntimeError(
-                    "检查远程后发现本地代码改动，已停止更新。请先处理工作区，再重新点击更新项目。"
+                    "检测到本地代码改动，已停止更新。请先提交/暂存这些改动，或确认它们不需要保留后再更新；控制台不会替你删除或覆盖。"
                 )
-            if local_only:
-                raise RuntimeError("本地存在未推送提交，无法执行快进更新；请先处理当前分支。")
-            if remote_only == 0:
-                message = "项目已是最新，没有需要更新的提交。"
-            else:
-                merge = run_git_command("merge", "--ff-only", f"origin/{branch}", timeout=60)
-                if merge.returncode != 0:
-                    detail = git_output_tail(merge.stdout) or f"Git 返回码 {merge.returncode}"
-                    raise RuntimeError(f"快进更新失败：{detail}")
-                message = (
-                    f"项目已更新，快进了 {remote_only} 个提交。"
-                    "请点击“重启全部”让 Bot/Bridge 载入新代码；如果控制台代码也更新，请关闭后重新打开控制台。"
-                )
-            self.after(0, lambda message=message: self._update_finished(message, False))
+            backup = create_backup(ROOT)
+            self._fetch_release_target(manifest["target_ref"])
+            target_ref = f"refs/tags/{manifest['target_ref']}"
+            target = run_git_command("rev-parse", "--verify", target_ref)
+            if target.returncode != 0:
+                target_ref = manifest["target_ref"]
+            merge = run_git_command("merge", "--ff-only", target_ref, timeout=60)
+            if merge.returncode != 0:
+                detail = git_output_tail(merge.stdout) or f"Git 返回码 {merge.returncode}"
+                raise RuntimeError(f"稳定版本更新失败（备份已保存到 {backup}）：{detail}")
+            message = f"已更新到 v{manifest['version']}（{manifest['update_type']}），更新前备份已保存到 {backup}。"
+            self.after(0, lambda message=message, manifest=manifest: self._update_finished(message, False, manifest))
         except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
             if isinstance(exc, subprocess.TimeoutExpired):
                 detail = "Git 操作超时，请检查网络或代理后重试。"
             else:
                 detail = str(exc)
-            self.after(0, lambda detail=detail: self._update_finished(f"项目更新失败：{detail}", True))
+            self.after(0, lambda detail=detail: self._update_finished(f"项目更新失败：{detail}", True, None))
 
-    def _update_finished(self, message: str, failed: bool) -> None:
+    def _update_finished(self, message: str, failed: bool, manifest: dict[str, str] | None) -> None:
         self._set_update_controls(False)
         self._append_log(message)
         if failed:
             messagebox.showwarning("项目更新失败", message, parent=self)
+            return
+        if not manifest:
+            return
+        update_type = manifest["update_type"]
+        if update_type == "force" and message.startswith("发现"):
+            self._required_update = True
+            self._append_log("这是强制更新：启动服务前必须先完成更新")
+            messagebox.showwarning("需要强制更新", "当前版本不再兼容，请先点击“更新项目”。", parent=self)
+            return
+        if update_type == "force" and message.startswith("已更新到"):
+            self._required_update = False
+            self._append_log("强制更新已完成：正在重启 Bot 和 Bridge，NapCat/QQ 保持运行")
+            self.restart_all()
+            return
+        if update_type == "hot":
+            self._append_log("这是热更新：正在只重启 Bot 和 Bridge，NapCat/QQ 保持运行")
+            self.restart_all()
+        elif update_type == "normal" and message.startswith("已更新到"):
+            if messagebox.askyesno("更新完成", "普通更新已完成。现在重启 Bot 和 Bridge 吗？NapCat/QQ 不会被关闭。", parent=self):
+                self.restart_all()
 
     def clear_log(self) -> None:
         self.log.configure(state="normal")

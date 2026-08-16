@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from control_panel import HELP_SECTIONS, HELP_TEXTS, OPTION_LABELS, ControlPanel, build_napcat_command, build_napcat_nt_command, build_napcat_utf8_console_command, discover_qq_executable, format_panel_error, generate_service_token, git_output_tail, is_local_service_host, local_url_port, load_env_file, load_theme, parse_git_ahead_behind, parse_port, parse_model_ids, probe_models, save_env_file, save_theme, service_base_url, vision_status
+from control_panel import HELP_SECTIONS, HELP_TEXTS, OPTION_LABELS, ControlPanel, build_napcat_command, build_napcat_nt_command, build_napcat_utf8_console_command, discover_qq_executable, format_panel_error, generate_service_token, git_output_tail, is_local_service_host, local_url_port, load_env_file, load_theme, parse_git_ahead_behind, parse_port, parse_model_ids, parse_release_version, parse_update_manifest, probe_models, save_env_file, save_theme, service_base_url, vision_status
 
 
 class ControlPanelHelperTests(unittest.TestCase):
@@ -28,6 +28,19 @@ class ControlPanelHelperTests(unittest.TestCase):
         self.assertEqual(git_output_tail("one\ntwo\nthree\nfour\n", limit=2), "three；four")
         with self.assertRaises(ValueError):
             parse_git_ahead_behind("not git output")
+
+    def test_release_manifest_validates_version_and_update_type(self):
+        manifest = parse_update_manifest({
+            "version": "0.2.0",
+            "update_type": "hot",
+            "target_ref": "v0.2.0",
+            "min_version": "0.1.0",
+            "message": "服务重启优化",
+        })
+        self.assertEqual(manifest["target_ref"], "v0.2.0")
+        self.assertEqual(parse_release_version("v1.2.3"), (1, 2, 3))
+        with self.assertRaises(ValueError):
+            parse_update_manifest({"version": "0.2", "update_type": "force", "target_ref": "v0.2", "min_version": "0.1.0", "message": ""})
 
     def test_ports_are_validated_without_touching_tk(self):
         self.assertEqual(parse_port("", 8765), 8765)
