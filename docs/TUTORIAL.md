@@ -217,7 +217,7 @@ ACTIVE_GROUP_TARGET_ID=你的群号
 ACTIVE_GROUP_PROMPT=想一句适合群里的自然近况
 ```
 
-主动消息由 Bridge 定时调用模型并通过 NapCat 发送，关闭控制台或 Bridge 后定时器会停止。
+主动消息由 Bridge 按目标独立计时：每个私聊或群聊目标会在最近一次聊天结束后等待配置的间隔，再调用模型并通过 NapCat 发送。主动消息会带上该目标最近的本地/远端上下文以及 Bot 已发送的消息，不会把多个目标合并成一次无上下文请求。关闭控制台或 Bridge 后定时器会停止。
 
 工具调用默认关闭。开启后仍然只允许 `TOOL_ALLOWLIST` 中的工具；当前内置
 `get_time`，模型通过 `[[TOOL:get_time]]` 请求，Bridge 把结果交回模型后再发送最终消息。

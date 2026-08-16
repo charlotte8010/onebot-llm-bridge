@@ -245,6 +245,16 @@ class BotService:
             "When a simple QQ reaction is more natural than text, you may append "
             "[[REACTION:emoji_name]] using one of the catalog names below."
         )
+        active_message = bool(payload.get("active"))
+        if active_message:
+            system += (
+                " This is a proactive message, not a reply to a new user question. "
+                "Use the recent conversation as the main source for what to say next. "
+                "Continue a concrete unfinished topic when one exists; do not say that you forgot "
+                "what you talked about, and do not use vague openers such as '哈？' or '我们之前聊啥了来着' "
+                "when context is available. If there is no useful recent context, start one specific, "
+                "low-pressure topic from the supplied prompt or verified facts."
+            )
         if str(payload.get("conversation", "")).startswith("private:"):
             system += (
                 " This is a private chat: choose naturally between one, two, or occasionally three bubbles. "
@@ -269,7 +279,14 @@ class BotService:
             system += "\n\nVerified user facts. Do not add or alter facts:\n- " + "\n- ".join(
                 str(item).strip() for item in facts if str(item).strip()
             )
-        user_prompt = f"Recent context:\n{context_text}\n\nNew message:\n{message}"
+        if active_message:
+            user_prompt = (
+                f"Recent context:\n{context_text}\n\n"
+                f"主动聊天要求（仅作为方向，不要原样复述）：{message}\n"
+                "请像已经认识对方的人一样自然开启或继续这段聊天。"
+            )
+        else:
+            user_prompt = f"Recent context:\n{context_text}\n\nNew message:\n{message}"
         summary = str(payload.get("summary", "")).strip()
         if summary:
             user_prompt = "Conversation summary (treat as fallible context):\n" + summary[:4000] + "\n\n" + user_prompt
@@ -620,7 +637,9 @@ class Bridge:
         self._worker_id = f"bridge-{uuid.uuid4().hex}"
         self._shutdown = False
         for target_type in self._active_target_types():
-            self._schedule_active_message(target_type)
+            _enabled, configured_ids, _prompt = self._active_target_config(target_type)
+            for target_id in parse_target_ids(configured_ids):
+                self._schedule_active_message(target_type, target_id)
 
     def _metric(self, name: str, amount: int = 1) -> None:
         with self._metrics_lock:
@@ -962,14 +981,20 @@ class Bridge:
             for bubble in bubbles:
                 if first.conversation_type == "private":
                     if mode == "quote_reply":
-                        self.napcat.send_private(first.conversation_id, bubble, reply_to=reply_to)
+                        send_result = self.napcat.send_private(first.conversation_id, bubble, reply_to=reply_to)
                     else:
-                        self.napcat.send_private(first.conversation_id, bubble)
+                        send_result = self.napcat.send_private(first.conversation_id, bubble)
                 else:
                     if mode == "quote_reply":
-                        self.napcat.send_group(first.conversation_id, bubble, reply_to=reply_to)
+                        send_result = self.napcat.send_group(first.conversation_id, bubble, reply_to=reply_to)
                     else:
-                        self.napcat.send_group(first.conversation_id, bubble)
+                        send_result = self.napcat.send_group(first.conversation_id, bubble)
+                self._record_outbound_message(
+                    first.conversation_type,
+                    first.conversation_id,
+                    bubble,
+                    self._sent_message_id(send_result),
+                )
             if first.conversation_type == "group" and self.settings.group_mode == "smart":
                 with self._state_lock:
                     self._topic_until[first.conversation_key] = time.time() + self.settings.followup_seconds
@@ -1060,11 +1085,17 @@ class Bridge:
                     print(f"remote memory fact delete failed: {exc.code}: {exc}")
             acknowledgement = "忘掉了" if removed else "我没有记过这个"
         if message.conversation_type == "private":
-            self.napcat.send_private(message.conversation_id, acknowledgement)
+            send_result = self.napcat.send_private(message.conversation_id, acknowledgement)
         elif mode == "quote_reply":
-            self.napcat.send_group(message.conversation_id, acknowledgement, reply_to=message.message_id)
+            send_result = self.napcat.send_group(message.conversation_id, acknowledgement, reply_to=message.message_id)
         else:
-            self.napcat.send_group(message.conversation_id, acknowledgement)
+            send_result = self.napcat.send_group(message.conversation_id, acknowledgement)
+        self._record_outbound_message(
+            message.conversation_type,
+            message.conversation_id,
+            acknowledgement,
+            self._sent_message_id(send_result),
+        )
         return {"handled": True, "reason": "memory_updated"}
 
     def _active_target_types(self) -> tuple[str, ...]:
@@ -1088,31 +1119,118 @@ class Bridge:
             self.settings.active_private_prompt,
         )
 
-    def _schedule_active_message(self, target_type: str) -> None:
-        previous = self._active_timers.get(target_type)
+    def _active_context(self, conversation_key: str) -> tuple[list[NormalizedMessage], str, list[str]]:
+        with self._state_lock:
+            local_context = list(self._context_for(conversation_key))
+        model_context = local_context
+        summary = ""
+        remote_facts: list[str] = []
+        if self.remote_memory is not None:
+            try:
+                remote_context = self._cached_remote_context(
+                    conversation_key,
+                    max(self.settings.context_messages, 1),
+                )
+                current_ids = {item.message_id for item in local_context if item.message_id}
+                remote_messages = [
+                    item for item in remote_context.messages if item.message_id not in current_ids
+                ]
+                model_context = _merge_context_messages(
+                    remote_messages,
+                    local_context,
+                    self.settings.context_messages,
+                )
+                summary = remote_context.summary
+                remote_facts.extend(str(item) for item in remote_context.facts)
+            except RemoteMemoryError as exc:
+                print(f"active message context failed: {exc.code}: {exc}")
+        conversation_type, conversation_id = conversation_key.split(":", 1)
+        scope = f"user:{conversation_id}" if conversation_type == "private" else f"conversation:{conversation_key}"
+        local_facts = self.memory_store.load_facts(scope) if self.memory_store else []
+        return model_context, summary, list(dict.fromkeys([*local_facts, *remote_facts]))[:100]
+
+    @staticmethod
+    def _sent_message_id(result: Any) -> str:
+        if not isinstance(result, Mapping):
+            return ""
+        direct = str(result.get("message_id", "")).strip()
+        if direct:
+            return direct
+        data = result.get("data")
+        if isinstance(data, Mapping):
+            return str(data.get("message_id", data.get("id", ""))).strip()
+        return ""
+
+    def _record_outbound_message(
+        self,
+        conversation_type: str,
+        conversation_id: str,
+        text: str,
+        message_id: str = "",
+    ) -> None:
+        """Keep Bot messages beside user messages so later prompts have a real dialogue."""
+        if not text.strip():
+            return
+        bot_id = self.settings.bot_qq or "bot"
+        message = NormalizedMessage(
+            event_id=f"outbound:{uuid.uuid4().hex}",
+            timestamp=int(time.time()),
+            conversation_type=conversation_type,
+            conversation_id=str(conversation_id),
+            sender_id=bot_id,
+            sender_name="Bot",
+            message_id=message_id,
+            text=text.strip(),
+            is_self=True,
+        )
+        with self._state_lock:
+            self._context_for(message.conversation_key).append(message)
+        if self.memory_store is not None:
+            self.memory_store.append(message)
+        self._ingest_remote(message)
+        self._reset_active_timer(conversation_type, str(conversation_id))
+
+    def _reset_active_timer(self, target_type: str, target_id: str) -> None:
+        enabled, configured_ids, _prompt = self._active_target_config(target_type)
+        if enabled and target_id in parse_target_ids(configured_ids):
+            self._schedule_active_message(target_type, target_id)
+
+    def _schedule_active_message(self, target_type: str, target_id: str, delay: float | None = None) -> None:
+        key = f"{target_type}:{target_id}"
+        previous = self._active_timers.get(key)
         if previous is not None:
             previous.cancel()
         timer = threading.Timer(
-            self.settings.active_interval_minutes * 60.0,
+            self.settings.active_interval_minutes * 60.0 if delay is None else max(0.0, delay),
             self._active_message_tick,
-            args=(target_type,),
+            args=(target_type, target_id),
         )
         timer.daemon = True
-        self._active_timers[target_type] = timer
+        self._active_timers[key] = timer
         timer.start()
 
-    def _active_message_tick(self, target_type: str) -> None:
-        enabled, target_id, prompt = self._active_target_config(target_type)
-        target_ids = parse_target_ids(target_id)
+    def _active_message_tick(self, target_type: str, target_id: str | None = None) -> None:
+        enabled, configured_ids, prompt = self._active_target_config(target_type)
+        target_ids = parse_target_ids(configured_ids)
         if not enabled or not target_ids or not prompt:
             return
+        if target_id is None:
+            for configured_target in target_ids:
+                self._active_message_tick(target_type, configured_target)
+            return
+        if target_id not in target_ids:
+            return
         try:
+            conversation_key = f"{target_type}:{target_id}"
+            context, summary, facts = self._active_context(conversation_key)
             payload = {
                 "message": prompt,
-                "context": [],
-                "conversation": f"{target_type}:{','.join(target_ids)}",
+                "context": [item.context_dict(self.settings.bot_qq) for item in context],
+                "conversation": conversation_key,
                 "images": [],
-                "facts": [],
+                "facts": facts,
+                "summary": summary,
+                "active": True,
             }
             result = self.bot_request(payload)
             bubbles = result.get("bubbles")
@@ -1122,16 +1240,21 @@ class Bridge:
             if quality_warnings:
                 print(f"active message quality adjusted: {','.join(quality_warnings)}")
             for bubble in bubbles:
-                for target in target_ids:
-                    if target_type == "group":
-                        self.napcat.send_group(target, bubble)
-                    else:
-                        self.napcat.send_private(target, bubble)
+                if target_type == "group":
+                    send_result = self.napcat.send_group(target_id, bubble)
+                else:
+                    send_result = self.napcat.send_private(target_id, bubble)
+                self._record_outbound_message(
+                    target_type,
+                    target_id,
+                    bubble,
+                    self._sent_message_id(send_result),
+                )
         except Exception as exc:
             print(f"active message failed: {type(exc).__name__}: {exc}")
         finally:
             if enabled and not self._shutdown:
-                self._schedule_active_message(target_type)
+                self._schedule_active_message(target_type, target_id)
 
     def handle_event(self, event: Mapping[str, Any]) -> dict[str, Any]:
         message = NormalizedMessage.from_onebot(event)
@@ -1141,6 +1264,7 @@ class Bridge:
         if self._is_repeated_auto_reply(message):
             self._metric("events_ignored")
             return {"handled": False, "reason": "repeated_auto_reply"}
+        self._reset_active_timer(message.conversation_type, message.conversation_id)
         self._metric("events_received")
         self._ingest_remote(message)
         decision = self._decision(message)
@@ -1174,6 +1298,7 @@ class Bridge:
         if self._is_repeated_auto_reply(message):
             self._metric("events_ignored")
             return {"accepted": False, "reason": "repeated_auto_reply"}
+        self._reset_active_timer(message.conversation_type, message.conversation_id)
         self._ingest_remote(message)
         decision = self._decision(message)
         if not is_meaningful(message) or not decision.should_reply:

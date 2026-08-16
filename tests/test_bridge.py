@@ -192,7 +192,52 @@ class BridgeTests(unittest.TestCase):
             napcat.sent,
             [("private", "100", "主动消息"), ("private", "200", "主动消息")],
         )
-        self.assertEqual([call["conversation"] for call in calls], ["private:100,200"])
+        self.assertEqual([call["conversation"] for call in calls], ["private:100", "private:200"])
+
+    def test_active_message_uses_target_context_and_records_bot_turn(self):
+        settings = Settings.from_values(
+            {
+                "LLM_API_KEY": "key",
+                "LLM_BASE_URL": "https://example.test/v1",
+                "LLM_MODEL": "chat",
+                "ACTIVE_INTERVAL_MINUTES": "1",
+                "ACTIVE_PRIVATE_ENABLED": "true",
+                "ACTIVE_PRIVATE_TARGET_ID": "100",
+                "ACTIVE_PRIVATE_PROMPT": "找个话题继续聊",
+            }
+        )
+        napcat = FakeNapCat()
+        calls = []
+
+        def bot_request(payload):
+            calls.append(payload)
+            return {"bubbles": ["记得刚才的话题"]}
+
+        bridge = Bridge(settings, napcat=napcat, bot_request=bot_request)
+        bridge.handle_event(
+            {
+                "post_type": "message",
+                "message_type": "private",
+                "user_id": 100,
+                "message_id": 1,
+                "message": "我们刚才聊到如龙了",
+            }
+        )
+        bridge._active_message_tick("private", "100")
+        bridge.shutdown()
+
+        active_call = calls[-1]
+        self.assertTrue(active_call["active"])
+        self.assertEqual(active_call["conversation"], "private:100")
+        context_text = [item["text"] for item in active_call["context"]]
+        self.assertEqual(context_text, ["我们刚才聊到如龙了", "记得刚才的话题"])
+        self.assertEqual(
+            napcat.sent,
+            [
+                ("private", "100", "记得刚才的话题"),
+                ("private", "100", "记得刚才的话题"),
+            ],
+        )
 
     def test_unaddressed_group_is_ignored(self):
         napcat = FakeNapCat()
