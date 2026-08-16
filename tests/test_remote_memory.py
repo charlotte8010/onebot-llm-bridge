@@ -73,11 +73,30 @@ class RemoteMemoryTests(unittest.TestCase):
         self.assertEqual(request.get_header("Apikey"), "sb_secret_test")
         self.assertIn("on_conflict=bot_qq%2Cconversation_key%2Csource_message_id", request.full_url)
 
+    def test_ingest_uses_event_id_when_message_id_is_missing(self):
+        message = NormalizedMessage(
+            event_id="outbound:event-1",
+            timestamp=1,
+            conversation_type="private",
+            conversation_id="42",
+            sender_id="100",
+            sender_name="Bot",
+            message_id="",
+            text="hello",
+            is_self=True,
+        )
+        self.assertTrue(self.store.ingest(message))
+        request, _ = self.requests[-1]
+        payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(payload["source_message_id"], "outbound:event-1")
+
     def test_load_context_returns_summary_facts_and_normalized_messages(self):
         context = self.store.load_context("private:42", 20)
         self.assertEqual(context.summary, "A short summary")
         self.assertEqual(context.facts, ("likes mystery novels",))
         self.assertEqual(context.messages[0].message_id, "8")
+        message_request = next(request for request, _ in self.requests if "bridge_messages" in request.full_url)
+        self.assertIn("order=occurred_at.desc%2Cid.desc", message_request.full_url)
 
     def test_smart_groups_are_numeric_and_facts_are_scoped(self):
         self.assertEqual(self.store.smart_groups(), frozenset({"999"}))

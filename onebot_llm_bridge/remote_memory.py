@@ -116,7 +116,7 @@ class RemoteMemoryStore:
             "conversation_id": message.conversation_id,
             "sender_id": message.sender_id,
             "sender_name": message.sender_name[:128],
-            "source_message_id": message.message_id,
+            "source_message_id": message.message_id or message.event_id,
             "is_self": message.sender_id == self.bot_qq,
             "content_text": message.text[:4000],
             "segments": list(message.segments),
@@ -139,10 +139,10 @@ class RemoteMemoryStore:
             "GET",
             "bridge_messages",
             query={
-                "select": "conversation_key,conversation_type,conversation_id,sender_id,sender_name,source_message_id,content_text,segments,reply_to,occurred_at,is_self",
+                "select": "id,conversation_key,conversation_type,conversation_id,sender_id,sender_name,source_message_id,content_text,segments,reply_to,occurred_at,is_self",
                 "bot_qq": f"eq.{self.bot_qq}",
                 "conversation_key": f"eq.{conversation_key}",
-                "order": "occurred_at.desc",
+                "order": "occurred_at.desc,id.desc",
                 "limit": limit,
             },
         )

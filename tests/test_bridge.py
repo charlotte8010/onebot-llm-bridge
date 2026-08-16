@@ -239,6 +239,17 @@ class BridgeTests(unittest.TestCase):
             ],
         )
 
+    def test_outbound_messages_without_api_ids_keep_distinct_turns(self):
+        bridge = Bridge(self.settings(), napcat=FakeNapCat(), bot_request=lambda payload: {})
+        bridge._record_outbound_message("private", "123", "first outbound")
+        bridge._record_outbound_message("private", "123", "second outbound")
+        with bridge._state_lock:
+            context = list(bridge._context_for("private:123"))
+        bridge.shutdown()
+        self.assertEqual([item.text for item in context], ["first outbound", "second outbound"])
+        self.assertTrue(all(item.message_id for item in context))
+        self.assertNotEqual(context[0].message_id, context[1].message_id)
+
     def test_unaddressed_group_is_ignored(self):
         napcat = FakeNapCat()
         bridge = Bridge(self.settings(), napcat=napcat, bot_request=lambda payload: {"bubbles": ["no"]})

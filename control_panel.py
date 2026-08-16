@@ -24,13 +24,16 @@ from onebot_llm_bridge.backup import create_backup, restore_backup
 
 
 ROOT = Path(__file__).resolve().parent
+APP_TITLE = "OneBot LLM Bridge"
+ICON_PATH = ROOT / "assets" / "console_icon.png"
+ICON_ICO_PATH = ROOT / "assets" / "console_icon.ico"
 ENV_FILE = ROOT / ".env.local"
 PRESETS_FILE = ROOT / ".model_presets.json"
 THEME_FILE = ROOT / ".control_panel_theme.json"
 BOT_SCRIPT = ROOT / "bot_service.py"
 BRIDGE_SCRIPT = ROOT / "app.py"
 DEFAULT_NAPCAT_API_URL = "http://127.0.0.1:3000"
-DEFAULT_WINDOW_GEOMETRY = "1180x980"
+DEFAULT_WINDOW_GEOMETRY = "1180x1040"
 DEFAULT_UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/charlotte8010/onebot-llm-bridge/main/update_manifest.json"
 UPDATE_TYPES = {"hot", "normal", "force"}
 
@@ -904,6 +907,136 @@ class HelpBadge(tk.Canvas):
         self._draw()
 
 
+class RoundedScrollbar(tk.Canvas):
+    """A lightweight rectangular scrollbar with consistent drag geometry."""
+
+    def __init__(
+        self,
+        master: tk.Misc,
+        *,
+        owner: "ControlPanel",
+        command: Callable[..., object],
+        orient: str = "vertical",
+        **_kwargs: object,
+    ) -> None:
+        if orient != "vertical":
+            raise ValueError("RoundedScrollbar only supports vertical scrolling")
+        self.owner = owner
+        self.command = command
+        self.first = 0.0
+        self.last = 1.0
+        self._thumb_bounds = (0, 0, 0, 0)
+        self._hover = False
+        self._last_drag_target: float | None = None
+        super().__init__(
+            master,
+            width=12,
+            highlightthickness=0,
+            borderwidth=0,
+            relief="flat",
+            takefocus=0,
+            cursor="hand2",
+        )
+        owner._rounded_scrollbars.append(self)
+        self.bind("<Configure>", lambda _event: self._draw(), add="+")
+        self.bind("<Button-1>", self._press, add="+")
+        self.bind("<B1-Motion>", self._drag, add="+")
+        self.bind("<MouseWheel>", self._wheel, add="+")
+        self.bind("<Enter>", self._enter, add="+")
+        self.bind("<Leave>", self._leave, add="+")
+        self.bind("<Button-4>", lambda _event: self._scroll(-3), add="+")
+        self.bind("<Button-5>", lambda _event: self._scroll(3), add="+")
+        self._drag_offset = 0
+        self._track_color = owner.COLORS["surface_alt"]
+        self._thumb_color = owner.COLORS["muted"]
+        self._thumb_active_color = owner.COLORS["accent"]
+        self._track_id = self.create_rectangle(0, 0, 0, 0, outline="", fill=self._track_color)
+        self._thumb_id = self.create_rectangle(0, 0, 0, 0, outline="", fill=self._thumb_color)
+        self.apply_theme(owner.COLORS)
+
+    def apply_theme(self, colors: dict[str, str]) -> None:
+        self.configure(background=colors["surface_alt"])
+        self._track_color = colors["surface_alt"]
+        self._thumb_color = colors["muted"]
+        self._thumb_active_color = colors["accent"]
+        self.itemconfigure(self._track_id, fill=self._track_color)
+        self._update_thumb_color()
+        self._draw()
+
+    def set(self, first: str | float, last: str | float) -> None:
+        self.first = float(first)
+        self.last = float(last)
+        self._draw()
+
+    def get(self) -> tuple[float, float]:
+        return self.first, self.last
+
+    def _draw(self, _event: tk.Event[tk.Misc] | None = None) -> None:
+        if not self.winfo_exists():
+            return
+        width = max(self.winfo_width(), 12)
+        height = max(self.winfo_height(), 1)
+        self.coords(self._track_id, 0, 0, width, height)
+        self.itemconfigure(self._track_id, state="normal")
+        visible = max(0.0, min(1.0, self.last - self.first))
+        if visible >= 0.999:
+            self._thumb_bounds = (0, 0, 0, 0)
+            self.itemconfigure(self._thumb_id, state="hidden")
+            return
+        thumb_height = max(26, int(visible * height))
+        thumb_height = min(height, thumb_height)
+        travel = max(height - thumb_height, 0)
+        top = int(max(0.0, min(1.0, self.first)) * travel)
+        bottom = top + thumb_height
+        left, right = 1, max(width - 1, 2)
+        self.coords(self._thumb_id, left, top, right, bottom)
+        self.itemconfigure(self._thumb_id, state="normal")
+        self._thumb_bounds = (left, top, right, bottom)
+
+    def _update_thumb_color(self) -> None:
+        if hasattr(self, "_thumb_id"):
+            color = self._thumb_active_color if self._hover else self._thumb_color
+            self.itemconfigure(self._thumb_id, fill=color)
+
+    def _press(self, event: tk.Event[tk.Misc]) -> None:
+        left, top, right, bottom = self._thumb_bounds
+        self._last_drag_target = None
+        if bottom > top and left <= event.x <= right and top <= event.y <= bottom:
+            self._drag_offset = event.y - top
+            return
+        self._scroll(-1 if bottom <= top or event.y < top else 1, pages=True)
+
+    def _drag(self, event: tk.Event[tk.Misc]) -> None:
+        if self.last - self.first >= 0.999:
+            return
+        height = max(self.winfo_height(), 1)
+        visible = self.last - self.first
+        thumb_height = min(height, max(26, int(visible * height)))
+        travel = max(height - thumb_height, 1)
+        target = (event.y - self._drag_offset) / travel
+        target = max(0.0, min(1.0 - visible, target))
+        if self._last_drag_target is not None and abs(target - self._last_drag_target) < 0.0005:
+            return
+        self._last_drag_target = target
+        self.command("moveto", target)
+
+    def _wheel(self, event: tk.Event[tk.Misc]) -> str:
+        units = -3 if event.delta > 0 else 3
+        self._scroll(units)
+        return "break"
+
+    def _enter(self, _event: tk.Event[tk.Misc]) -> None:
+        self._hover = True
+        self._update_thumb_color()
+
+    def _leave(self, _event: tk.Event[tk.Misc]) -> None:
+        self._hover = False
+        self._update_thumb_color()
+
+    def _scroll(self, amount: int, pages: bool = False) -> None:
+        self.command("scroll", amount, "pages" if pages else "units")
+
+
 class ControlPanel(tk.Tk):
     THEMES = {
         "morandi": {
@@ -954,7 +1087,15 @@ class ControlPanel(tk.Tk):
     def __init__(self) -> None:
         enable_windows_dpi_awareness()
         super().__init__()
-        self.title("OneBot LLM Bridge | 控制台")
+        self._icon_image = self._load_window_icon()
+        if self._icon_image is not None:
+            self.iconphoto(True, self._icon_image)
+        if ICON_ICO_PATH.is_file():
+            try:
+                self.iconbitmap(default=str(ICON_ICO_PATH))
+            except tk.TclError:
+                pass
+        self.title(f"{APP_TITLE} | 控制台")
         self.geometry(DEFAULT_WINDOW_GEOMETRY)
         self.minsize(960, 700)
         self.values = load_env_file(ENV_FILE)
@@ -966,6 +1107,7 @@ class ControlPanel(tk.Tk):
         self._scroll_job: str | None = None
         self._pending_scroll_units = 0
         self._help_badges: list[HelpBadge] = []
+        self._rounded_scrollbars: list[RoundedScrollbar] = []
         self._help_window: tk.Toplevel | None = None
         self.bot = ServiceProcess("bot", BOT_SCRIPT, self.log_queue)
         self.bridge = ServiceProcess("bridge", BRIDGE_SCRIPT, self.log_queue)
@@ -978,9 +1120,20 @@ class ControlPanel(tk.Tk):
         self._update_busy = False
         self._required_update = False
         self._build_ui()
+        self.after_idle(self._set_default_splitter_position)
         self.after(200, self._drain_logs)
         self.after(1000, self._refresh_status)
         self.protocol("WM_DELETE_WINDOW", self._close)
+
+    @staticmethod
+    def _load_window_icon() -> tk.PhotoImage | None:
+        """Load the bundled icon while keeping direct-run startup optional."""
+        if not ICON_PATH.is_file():
+            return None
+        try:
+            return tk.PhotoImage(file=str(ICON_PATH))
+        except tk.TclError:
+            return None
 
     def _value(self, key: str, default: str = "") -> str:
         return self.values.get(key, os.environ.get(key, default)).strip()
@@ -1016,14 +1169,14 @@ class ControlPanel(tk.Tk):
         style.configure("Section.TLabelframe", background=colors["surface"], foreground=colors["border"], bordercolor=colors["border"])
         style.configure("Section.TLabelframe.Label", background=colors["surface"], foreground=colors["accent"])
         style.configure("TLabel", background=colors["surface"], foreground=colors["text"])
-        style.configure("TEntry", fieldbackground=colors["input"], foreground=colors["text"], bordercolor=colors["border"], lightcolor=colors["border"], darkcolor=colors["border"])
+        style.configure("TEntry", fieldbackground=colors["input"], foreground=colors["text"], bordercolor=colors["input"], lightcolor=colors["input"], darkcolor=colors["input"], borderwidth=0, relief="flat")
         style.map(
             "TEntry",
             bordercolor=[("focus", colors["border"])],
             lightcolor=[("focus", colors["border"])],
             darkcolor=[("focus", colors["border"])],
         )
-        style.configure("TCombobox", fieldbackground=colors["input"], foreground=colors["text"], bordercolor=colors["border"], lightcolor=colors["border"], darkcolor=colors["border"])
+        style.configure("TCombobox", fieldbackground=colors["input"], foreground=colors["text"], bordercolor=colors["input"], lightcolor=colors["input"], darkcolor=colors["input"], borderwidth=0, relief="flat")
         style.map(
             "TCombobox",
             bordercolor=[("focus", colors["border"])],
@@ -1076,6 +1229,11 @@ class ControlPanel(tk.Tk):
         )
         if hasattr(self, "log"):
             self.log.configure(background=colors["log"], foreground=colors["text"], insertbackground=colors["accent"], selectbackground=colors["accent_soft"])
+        if hasattr(self, "main_splitter"):
+            self.main_splitter.configure(background=colors["background"])
+        for scrollbar in getattr(self, "_rounded_scrollbars", []):
+            if scrollbar.winfo_exists():
+                scrollbar.apply_theme(colors)
         for canvas in getattr(self, "_tab_canvases", []):
             canvas.configure(background=colors["background"])
         if hasattr(self, "notebook"):
@@ -1167,6 +1325,41 @@ class ControlPanel(tk.Tk):
                 )
             ],
         )
+        style.layout(
+            "TEntry",
+            [
+                (
+                    "Entry.field",
+                    {
+                        "sticky": "nswe",
+                        "children": [
+                            (
+                                "Entry.padding",
+                                {"sticky": "nswe", "children": [("Entry.textarea", {"sticky": "nswe"})]},
+                            )
+                        ],
+                    },
+                )
+            ],
+        )
+        style.layout(
+            "TCombobox",
+            [
+                (
+                    "Combobox.field",
+                    {
+                        "sticky": "nswe",
+                        "children": [
+                            ("Combobox.downarrow", {"side": "right", "sticky": "ns"}),
+                            (
+                                "Combobox.padding",
+                                {"sticky": "nswe", "children": [("Combobox.textarea", {"sticky": "nswe"})]},
+                            ),
+                        ],
+                    },
+                )
+            ],
+        )
 
     def _build_ui(self) -> None:
         style = ttk.Style(self)
@@ -1190,14 +1383,14 @@ class ControlPanel(tk.Tk):
         style.configure("Section.TLabelframe", background=colors["surface"], foreground=colors["border"], bordercolor=colors["border"], relief="solid", borderwidth=1)
         style.configure("Section.TLabelframe.Label", background=colors["surface"], foreground=colors["accent"], font=("Microsoft YaHei UI", 10, "bold"))
         style.configure("TLabel", background=colors["surface"], foreground=colors["text"])
-        style.configure("TEntry", fieldbackground=colors["input"], foreground=colors["text"], bordercolor=colors["border"], lightcolor=colors["border"], darkcolor=colors["border"], padding=(8, 6))
+        style.configure("TEntry", fieldbackground=colors["input"], foreground=colors["text"], bordercolor=colors["input"], lightcolor=colors["input"], darkcolor=colors["input"], borderwidth=0, relief="flat", padding=(8, 6))
         style.map(
             "TEntry",
             bordercolor=[("focus", colors["border"])],
             lightcolor=[("focus", colors["border"])],
             darkcolor=[("focus", colors["border"])],
         )
-        style.configure("TCombobox", fieldbackground=colors["input"], foreground=colors["text"], bordercolor=colors["border"], lightcolor=colors["border"], darkcolor=colors["border"], padding=(7, 5))
+        style.configure("TCombobox", fieldbackground=colors["input"], foreground=colors["text"], bordercolor=colors["input"], lightcolor=colors["input"], darkcolor=colors["input"], borderwidth=0, relief="flat", padding=(7, 5))
         style.map(
             "TCombobox",
             bordercolor=[("focus", colors["border"])],
@@ -1257,10 +1450,14 @@ class ControlPanel(tk.Tk):
         header_top = ttk.Frame(header, style="App.TFrame")
         header_top.pack(fill="x")
         ttk.Label(header_top, text="LOCAL OPERATOR CONSOLE", style="Eyebrow.TLabel").pack(side="left")
+        header_updates = ttk.Frame(header_top, style="App.TFrame")
+        header_updates.pack(side="right")
+        self.update_check_button = ttk.Button(header_updates, text="检查更新", command=self.check_updates)
+        self.update_check_button.pack(side="left", padx=(0, 8))
         self.theme_button = ttk.Button(header_top, command=self.toggle_theme)
         self.theme_button.pack(side="right")
         ttk.Button(header_top, text="操作说明", command=self.open_help).pack(side="right", padx=(0, 8))
-        ttk.Label(header, text="OneBot LLM Bridge", style="Title.TLabel").pack(anchor="w", pady=(3, 0))
+        ttk.Label(header, text=APP_TITLE, style="Title.TLabel").pack(anchor="w", pady=(3, 0))
         subtitle = ttk.Label(
             outer,
             text="模型、QQ 通道和本地服务。保存只写配置，启动与重启都由你明确触发。",
@@ -1272,35 +1469,50 @@ class ControlPanel(tk.Tk):
         actions.grid(row=2, column=0, sticky="ew", pady=(0, 14))
         primary_actions = ttk.Frame(actions, style="Command.TFrame")
         primary_actions.grid(row=0, column=0, sticky="w")
-        ttk.Button(primary_actions, text="保存配置", command=self.save_config, style="Primary.TButton").pack(side="left")
-        ttk.Button(primary_actions, text="启动全部", command=self.start_all).pack(side="left", padx=(8, 0))
+        ttk.Button(primary_actions, text="启动全部", command=self.start_all).pack(side="left")
         ttk.Button(primary_actions, text="启动 NapCat", command=self.start_napcat).pack(side="left", padx=(8, 0))
-        self.diagnostics_button = ttk.Button(primary_actions, text="一键诊断", command=self.run_diagnostics)
-        self.diagnostics_button.pack(side="left", padx=(8, 0))
-        ttk.Button(primary_actions, text="备份配置", command=self.backup_config).pack(side="left", padx=(8, 0))
-        ttk.Button(primary_actions, text="恢复配置", command=self.restore_config).pack(side="left", padx=(8, 0))
-        secondary_actions = ttk.Frame(actions, style="Command.TFrame")
-        secondary_actions.grid(row=0, column=1, sticky="e")
-        self.update_check_button = ttk.Button(secondary_actions, text="检查更新", command=self.check_updates)
-        self.update_check_button.pack(side="left")
-        self.update_button = ttk.Button(secondary_actions, text="更新项目", command=self.update_project)
-        self.update_button.pack(side="left", padx=(8, 0))
-        ttk.Button(secondary_actions, text="重启全部", command=self.restart_all).pack(side="left")
-        ttk.Button(secondary_actions, text="停止全部", command=self.stop_all, style="Danger.TButton").pack(side="left", padx=(8, 0))
-        actions.columnconfigure(1, weight=1)
+        ttk.Button(primary_actions, text="重启全部", command=self.restart_all).pack(side="left", padx=(8, 0))
+        ttk.Button(primary_actions, text="停止全部", command=self.stop_all, style="Danger.TButton").pack(side="left", padx=(8, 0))
+        actions.columnconfigure(0, weight=1)
 
-        tab_area = ttk.Frame(outer, style="App.TFrame")
-        tab_area.grid(row=3, column=0, sticky="nsew")
+        self.main_splitter = tk.PanedWindow(
+            outer,
+            orient="vertical",
+            showhandle=False,
+            handlesize=0,
+            # Resize panes live so the log area follows the pointer naturally.
+            # The sash itself uses the surrounding background, so it stays
+            # visually unobtrusive while retaining a usable hit area.
+            opaqueresize=True,
+            sashwidth=5,
+            sashpad=0,
+            sashrelief="flat",
+            sashcursor="sb_v_double_arrow",
+            borderwidth=0,
+            relief="flat",
+            background=colors["background"],
+        )
+        self.main_splitter.grid(row=3, column=0, sticky="nsew")
+        settings_pane = ttk.Frame(self.main_splitter, style="App.TFrame")
+        bottom_pane = ttk.Frame(self.main_splitter, style="App.TFrame")
+        settings_pane.columnconfigure(0, weight=1)
+        settings_pane.rowconfigure(0, weight=1)
+        bottom_pane.columnconfigure(0, weight=1)
+        bottom_pane.rowconfigure(1, weight=1)
+        self.main_splitter.add(settings_pane, stretch="always")
+        self.main_splitter.add(bottom_pane, stretch="always")
+        tab_area = ttk.Frame(settings_pane, style="App.TFrame")
+        tab_area.grid(row=0, column=0, sticky="nsew")
         tab_area.columnconfigure(0, weight=1)
         tab_area.rowconfigure(0, weight=1)
         notebook = FixedTabNotebook(tab_area, colors)
         self.notebook = notebook
         notebook.grid(row=0, column=0, sticky="nsew")
-        scrollbar = ttk.Scrollbar(
+        scrollbar = RoundedScrollbar(
             tab_area,
+            owner=self,
             orient="vertical",
             command=lambda *args: self._active_canvas.yview(*args),
-            style="Panel.Vertical.TScrollbar",
         )
         scrollbar.grid(row=0, column=1, sticky="ns", padx=(6, 0))
         model_tab, model_content, model_canvas = self._scrollable_tab(notebook)
@@ -1453,16 +1665,25 @@ class ControlPanel(tk.Tk):
         ttk.Button(network, text="选择", command=lambda: self._select_path(self.napcat_qq, "选择 QQ 程序")).grid(row=7, column=2, padx=(8, 0), pady=4)
         ttk.Button(network, text="选择", command=lambda: self._select_path(self.napcat_hook, "选择 NapCat Hook")).grid(row=8, column=2, padx=(8, 0), pady=4)
 
-        status = ttk.LabelFrame(outer, text="运行状态", padding=(8, 10), style="Section.TLabelframe")
-        status.grid(row=4, column=0, sticky="ew", pady=(14, 0))
+        utility_actions = ttk.Frame(settings_pane, style="Command.TFrame", padding=(10, 8))
+        utility_actions.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        utility_buttons = ttk.Frame(utility_actions, style="Command.TFrame")
+        utility_buttons.pack(side="right")
+        ttk.Button(utility_buttons, text="保存配置", command=self.save_config, style="Primary.TButton").pack(side="left")
+        ttk.Button(utility_buttons, text="备份配置", command=self.backup_config).pack(side="left", padx=(8, 0))
+        ttk.Button(utility_buttons, text="恢复配置", command=self.restore_config).pack(side="left", padx=(8, 0))
+        self.diagnostics_button = ttk.Button(utility_buttons, text="一键诊断", command=self.run_diagnostics)
+        self.diagnostics_button.pack(side="left", padx=(8, 0))
+
+        status = ttk.LabelFrame(bottom_pane, text="运行状态", padding=(8, 10), style="Section.TLabelframe")
+        status.grid(row=0, column=0, sticky="ew")
         self.bot_status = self._status(status, 0, "Bot")
         self.bridge_status = self._status(status, 1, "Bridge")
         self.vision_status = self._status(status, 2, "识图")
         self.napcat_status = self._status(status, 3, "NapCat")
 
-        log_shell = ttk.Frame(outer, style="Surface.TFrame", height=270)
-        log_shell.pack_propagate(False)
-        log_shell.grid(row=5, column=0, sticky="nsew", pady=(14, 0))
+        log_shell = ttk.Frame(bottom_pane, style="Surface.TFrame")
+        log_shell.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
         log_header = ttk.Frame(log_shell, style="Surface.TFrame")
         log_header.pack(fill="x", pady=(0, 6))
         ttk.Label(log_header, text="实时日志", style="Section.TLabelframe.Label").pack(side="left")
@@ -1484,9 +1705,29 @@ class ControlPanel(tk.Tk):
             padx=10,
             pady=8,
         )
-        self.log.pack(fill="both", expand=True)
+        log_frame.columnconfigure(0, weight=1)
+        log_frame.rowconfigure(0, weight=1)
+        self.log.grid(row=0, column=0, sticky="nsew")
+        self.log_scrollbar = RoundedScrollbar(
+            log_frame,
+            owner=self,
+            orient="vertical",
+            command=self.log.yview,
+        )
+        self.log_scrollbar.grid(row=0, column=1, sticky="ns", padx=(8, 0))
+        self.log.configure(yscrollcommand=self.log_scrollbar.set)
+        self.log.bind("<MouseWheel>", self._log_scroll_event, add="+")
+        self.log.bind("<Button-4>", lambda _event: self._log_scroll(-3), add="+")
+        self.log.bind("<Button-5>", lambda _event: self._log_scroll(3), add="+")
         self._apply_theme_styles()
         self.after_idle(self._update_scrollbar_visibility)
+
+    def _log_scroll(self, units: int) -> str:
+        self.log.yview_scroll(units, "units")
+        return "break"
+
+    def _log_scroll_event(self, event: tk.Event[tk.Misc]) -> str:
+        return self._log_scroll(-3 if event.delta > 0 else 3)
 
     def _update_scrollbar_visibility(self, canvas: tk.Canvas | None = None) -> None:
         if not hasattr(self, "_settings_scrollbar"):
@@ -1509,7 +1750,10 @@ class ControlPanel(tk.Tk):
         target = canvas or self._active_canvas
         if target is not self._active_canvas or self._scrollbar_visibility_job is not None:
             return
-        self._scrollbar_visibility_job = self.after_idle(self._run_scrollbar_visibility)
+        # A vertical sash drag can emit dozens of Configure events per second.
+        # Give the canvas a short quiet period before measuring its scrollable
+        # area again, keeping the drag responsive without hiding the scrollbar.
+        self._scrollbar_visibility_job = self.after(45, self._run_scrollbar_visibility)
 
     def _run_scrollbar_visibility(self) -> None:
         self._scrollbar_visibility_job = None
@@ -1567,13 +1811,19 @@ class ControlPanel(tk.Tk):
         canvas.grid(row=0, column=0, sticky="nsew")
         content = ttk.Frame(canvas, padding=(0, 12, 14, 12), style="App.TFrame")
         window = canvas.create_window((0, 0), window=content, anchor="nw")
+        content_width = -1
+
         def update_region(_event: tk.Event[tk.Misc] | None = None) -> None:
             canvas.configure(scrollregion=canvas.bbox("all"))
             self._schedule_scrollbar_visibility(canvas)
 
         content.bind("<Configure>", update_region)
+
         def resize_canvas(event: tk.Event[tk.Misc]) -> None:
-            canvas.itemconfigure(window, width=event.width)
+            nonlocal content_width
+            if event.width != content_width:
+                content_width = event.width
+                canvas.itemconfigure(window, width=event.width)
             self._schedule_scrollbar_visibility(canvas)
 
         canvas.bind("<Configure>", resize_canvas)
@@ -1716,7 +1966,14 @@ class ControlPanel(tk.Tk):
         colors = self.COLORS
         window = tk.Toplevel(self)
         self._help_window = window
-        window.title("OneBot LLM Bridge | 操作说明")
+        if self._icon_image is not None:
+            window.iconphoto(True, self._icon_image)
+        if ICON_ICO_PATH.is_file():
+            try:
+                window.iconbitmap(default=str(ICON_ICO_PATH))
+            except tk.TclError:
+                pass
+        window.title(f"{APP_TITLE} | 操作说明")
         window.geometry("980x680")
         window.minsize(760, 520)
         window.configure(background=colors["background"])
@@ -1783,11 +2040,11 @@ class ControlPanel(tk.Tk):
             spacing3=5,
         )
         text.grid(row=1, column=0, sticky="nsew")
-        document_scrollbar = ttk.Scrollbar(
+        document_scrollbar = RoundedScrollbar(
             document,
+            owner=self,
             orient="vertical",
             command=text.yview,
-            style="Panel.Vertical.TScrollbar",
         )
         document_scrollbar.grid(row=1, column=1, sticky="ns", padx=(10, 0))
         text.configure(yscrollcommand=document_scrollbar.set)
@@ -1893,7 +2150,8 @@ class ControlPanel(tk.Tk):
             messagebox.showerror("配置保存失败", str(exc), parent=self)
             return False
         self.values = values
-        self._append_log(f"配置已保存到 {ENV_FILE}；服务保持当前状态，未自动重启")
+        self._append_log("配置已保存；服务保持当前状态，未自动重启")
+        self._append_log(f"配置文件：{ENV_FILE}")
         return True
 
     def _preset_config(self) -> dict[str, str]:
@@ -2051,7 +2309,7 @@ class ControlPanel(tk.Tk):
         if self._required_update:
             message = "当前版本需要先完成强制更新，已暂时阻止启动服务"
             self._append_log(message)
-            messagebox.showwarning("需要更新", "检测到强制更新，请先点击“更新项目”。", parent=self)
+            messagebox.showwarning("需要更新", "检测到强制更新，请点击右上角“检查更新”，然后选择立即更新。", parent=self)
             return
         if not self.save_config():
             return
@@ -2213,11 +2471,11 @@ class ControlPanel(tk.Tk):
             tree.heading(column, text=headings[column])
             tree.column(column, width=widths[column], minwidth=70, anchor="w")
         tree.grid(row=1, column=0, sticky="nsew")
-        scroll = ttk.Scrollbar(
+        scroll = RoundedScrollbar(
             outer,
+            owner=self,
             orient="vertical",
             command=tree.yview,
-            style="Panel.Vertical.TScrollbar",
         )
         scroll.grid(row=1, column=1, sticky="ns")
         tree.configure(yscrollcommand=scroll.set)
@@ -2660,13 +2918,23 @@ class ControlPanel(tk.Tk):
         self.log.see("end")
         self.log.configure(state="disabled")
 
+    def _set_default_splitter_position(self) -> None:
+        """Give the settings area more room on first launch while keeping logs visible."""
+        try:
+            height = self.main_splitter.winfo_height()
+            if height <= 0:
+                self.after(100, self._set_default_splitter_position)
+                return
+            position = int(height * 0.68)
+            self.main_splitter.sashpos(0, max(360, min(position, height - 250)))
+        except tk.TclError:
+            return
+
     def _set_update_controls(self, busy: bool, checking: bool = False) -> None:
         self._update_busy = busy
         self.update_check_button.configure(text="检查中..." if checking else "检查更新")
-        self.update_button.configure(text="更新中..." if busy and not checking else "更新项目")
         state = ["disabled"] if busy else ["!disabled"]
         self.update_check_button.state(state)
-        self.update_button.state(state)
 
     def _git_update_snapshot(self) -> bool:
         status = run_git_command("status", "--porcelain", "--untracked-files=all")
@@ -2731,22 +2999,13 @@ class ControlPanel(tk.Tk):
         self._append_log("正在检查项目更新：不会修改本地文件，也不会重启服务")
         threading.Thread(target=self._update_worker, args=(False,), daemon=True).start()
 
-    def update_project(self) -> None:
+    def _start_project_update(self) -> None:
         if self._update_busy:
             return
         if not (ROOT / ".git").is_dir():
             message = "当前目录不是 Git 克隆目录，不能通过控制台更新；请首次用 git clone 下载项目。"
             self._append_log(message)
             messagebox.showwarning("无法更新项目", message, parent=self)
-            return
-        if not messagebox.askyesno(
-            "更新项目",
-            "将从 GitHub 获取最新代码，并且只允许快进更新。\n\n"
-            "不会覆盖 .env.local、Persona、词典、SQLite 记忆。\n"
-            "如果发现本地代码改动，更新会自动停止。更新完成后需要手动重启服务；控制台代码变化时还要重新打开控制台。\n\n"
-            "现在更新吗？",
-            parent=self,
-        ):
             return
         self._set_update_controls(True)
         self._append_log("正在更新项目：先检查本地改动，再获取远程代码")
@@ -2797,10 +3056,17 @@ class ControlPanel(tk.Tk):
         if not manifest:
             return
         update_type = manifest["update_type"]
-        if update_type == "force" and message.startswith("发现"):
-            self._required_update = True
-            self._append_log("这是强制更新：启动服务前必须先完成更新")
-            messagebox.showwarning("需要强制更新", "当前版本不再兼容，请先点击“更新项目”。", parent=self)
+        if message.startswith("发现"):
+            if update_type == "force":
+                self._required_update = True
+                self._append_log("这是强制更新：启动服务前必须先完成更新")
+            prompt = f"{message}\n\n现在更新项目吗？"
+            if update_type == "force":
+                prompt += "\n这是强制更新，不更新将无法启动服务。"
+            if messagebox.askyesno("发现项目更新", prompt, parent=self):
+                self._start_project_update()
+            elif update_type == "force":
+                messagebox.showwarning("需要更新", "当前版本不再兼容，请在“检查更新”后选择立即更新。", parent=self)
             return
         if update_type == "force" and message.startswith("已更新到"):
             self._required_update = False

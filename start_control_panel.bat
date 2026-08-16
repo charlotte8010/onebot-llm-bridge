@@ -1,6 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+title OneBot LLM Bridge ^| 控制台
 
 where py >nul 2>&1
 if not errorlevel 1 (

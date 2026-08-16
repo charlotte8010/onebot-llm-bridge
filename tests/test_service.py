@@ -71,6 +71,23 @@ class BotServiceVisionTests(unittest.TestCase):
         service.reply(self.payload())
         self.assertEqual(chat.calls[0][1], [])
 
+    def test_reply_prompt_exposes_bot_history_as_assistant_turn(self):
+        chat = FakeProvider("answer")
+        service = BotService(self.settings("off"), provider=chat)
+        service.reply(
+            {
+                "message": "what now",
+                "context": [
+                    {"speaker": "other", "text": "Is it good?"},
+                    {"speaker": "bot", "text": "I already said the topping is good."},
+                ],
+            }
+        )
+        prompt = chat.calls[0][0][-1]["content"]
+        self.assertIn("user: Is it good?", prompt)
+        self.assertIn("assistant: I already said the topping is good.", prompt)
+        self.assertIn("Current message from user:\nwhat now", prompt)
+
     def test_separate_mode_falls_back_when_vision_provider_fails(self):
         chat = FakeProvider("只根据文字回复")
         service = BotService(

@@ -17,7 +17,7 @@
 1. 先完成代码、测试和文档，确认本地配置与记忆不会被代码更新覆盖。
 2. 修改 `update_manifest.json`，提交后创建同名 Tag，例如 `v0.3.0`。
 3. 将提交和 Tag 推送到远程：`git push origin main --tags`。
-4. GitHub Actions 会自动创建 Release，并附带 `onebot-llm-bridge-vX.Y.Z.zip`。用户控制台点击“检查更新”，确认版本类型后再点击“更新项目”。
+4. GitHub Actions 会自动创建 Release，并附带 `onebot-llm-bridge-vX.Y.Z.zip`。用户在控制台点击“检查更新”，确认版本类型后，在弹窗里选择是否立即更新。
 
 GitHub 页面自带的 `Source code (zip)` 仍然会存在，它是 GitHub 固定生成的文件，不能重命名；用户应下载项目发布的带版本号压缩包。
 
