@@ -88,6 +88,26 @@ class BotServiceVisionTests(unittest.TestCase):
         self.assertIn("assistant: I already said the topping is good.", prompt)
         self.assertIn("Current message from user:\nwhat now", prompt)
 
+    def test_reply_prompt_includes_builtin_human_chat_worldbook_before_persona(self):
+        with tempfile.TemporaryDirectory() as directory:
+            persona = Path(directory) / "persona.txt"
+            persona.write_text("个人规则：逗号少一点", encoding="utf-8")
+            settings = Settings.from_values(
+                {
+                    "LLM_API_KEY": "chat-key",
+                    "LLM_BASE_URL": "https://chat.example/v1",
+                    "LLM_MODEL": "chat-model",
+                    "PERSONA_FILE": str(persona),
+                }
+            )
+            chat = FakeProvider("answer")
+            BotService(settings, provider=chat).reply({"message": "你好", "context": []})
+            prompt = chat.calls[0][0][0]["content"]
+            self.assertIn("Built-in human-chat worldbook:", prompt)
+            self.assertIn("禁止机械套用固定开场", prompt)
+            self.assertIn("User-provided persona:", prompt)
+            self.assertLess(prompt.index("Built-in human-chat worldbook:"), prompt.index("User-provided persona:"))
+
     def test_separate_mode_falls_back_when_vision_provider_fails(self):
         chat = FakeProvider("只根据文字回复")
         service = BotService(

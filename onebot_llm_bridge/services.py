@@ -31,6 +31,7 @@ from .tools import ToolRegistry, is_time_query, parse_tool_calls
 
 
 MAX_BODY_BYTES = 1_048_576
+BUILTIN_WORLDBOOK_PATH = Path(__file__).resolve().parents[1] / "assets" / "human_chat_worldbook.md"
 _REMEMBER_RE = re.compile(r"^(?:记住|remember)\s*[:：]\s*(.+)$", re.IGNORECASE)
 _FORGET_RE = re.compile(r"^(?:忘记|forget)\s*[:：]\s*(.+)$", re.IGNORECASE)
 
@@ -246,6 +247,13 @@ class BotService:
             return ""
         return path.read_text(encoding="utf-8")[:20_000]
 
+    @staticmethod
+    def worldbook() -> str:
+        """Load the versioned generic chat rules without making them user-editable state."""
+        if not BUILTIN_WORLDBOOK_PATH.is_file():
+            return ""
+        return BUILTIN_WORLDBOOK_PATH.read_text(encoding="utf-8")[:12_000]
+
     def reply(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         message = str(payload.get("message", "")).strip()
         if not message:
@@ -300,6 +308,9 @@ class BotService:
                 "for example, use [[TOOL:get_time]] when the user asks for the current time or date. "
                 "Never show tool markers in the final answer."
             )
+        worldbook = self.worldbook()
+        if worldbook:
+            system += "\n\nBuilt-in human-chat worldbook:\n" + worldbook
         persona = self.persona()
         if persona:
             system += "\n\nUser-provided persona:\n" + persona
