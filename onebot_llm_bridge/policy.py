@@ -22,31 +22,35 @@ def decide_reply(
     active_topic: bool = False,
     decision_mode: str = "heuristic",
 ) -> ReplyDecision:
+    def reply_mode(default: str = "reply") -> str:
+        return "quote_reply" if message.reply_to else default
+
     if message.is_self or (bot_qq and message.sender_id == bot_qq):
         return ReplyDecision(False, "self_message", "ignore")
     if message.conversation_type == "private":
-        return ReplyDecision(True, "private_message")
+        return ReplyDecision(True, "private_message", reply_mode())
     if message.conversation_id not in group_allowlist:
         return ReplyDecision(False, "group_not_allowlisted", "ignore")
     if group_mode == "off":
         return ReplyDecision(False, "group_mode_off", "ignore")
     if group_mode == "all":
-        return ReplyDecision(True, "group_mode_all")
+        return ReplyDecision(True, "group_mode_all", reply_mode())
     mentioned_qq = any(
         segment.get("type") == "at"
         and str(segment.get("data", {}).get("qq", "")) == bot_qq
         for segment in message.segments
     )
     addressed = (
+        bool(message.reply_to)
+        or
         message.to_me
         or mentioned_qq
         or any(name and name.lower() in message.text.lower() for name in address_names)
     )
     if addressed:
-        mode = "quote_reply" if message.reply_to else "reply"
-        return ReplyDecision(True, "addressed", mode)
+        return ReplyDecision(True, "addressed", reply_mode())
     if group_mode == "smart" and (active_topic or decision_mode == "model"):
         reason = "active_topic" if active_topic else "model_decision_pending"
-        mode = "active_topic" if active_topic else "smart_decision"
+        mode = reply_mode("active_topic" if active_topic else "smart_decision")
         return ReplyDecision(True, reason, mode)
     return ReplyDecision(False, "not_addressed", "ignore")

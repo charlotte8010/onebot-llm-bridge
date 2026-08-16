@@ -140,6 +140,7 @@ HELP_TEXTS: dict[str, str] = {
     "CONTEXT_MESSAGES": "每次请求附带的最近消息条数。太少会断上下文，太多会增加延迟和输入费用。",
     "MEMORY_DB": "本地 SQLite 记忆库路径。留空也可以运行，只是不保存跨重启的本地记忆。",
     "REACTION_MODE": "点赞回应只是在已有消息上加 reaction，不会额外发送一条表情消息。",
+    "REPLY_TO_MESSAGE": "开启后，群聊普通回复会引用触发这次回复的那条消息；私聊只有在对方引用消息时才会跟随引用。关闭后仍会保留对方主动引用的目标。",
     "PERSONA_FILE": "稳定的人设提示词文件。建议把长期不变的人设、说话方式和明确禁忌放在这里。",
     "EMOJI_CATALOG": "表情词典路径。可以点击“编辑词典”，让模型知道“笑死”“无语”等词对应哪个 NapCat 表情 ID。",
     "ACTIVE_ENABLED": "旧版单目标主动消息开关。新版请分别使用“启用私聊主动消息”和“启用群聊主动消息”。",
@@ -278,6 +279,7 @@ NapCat WebUI 的配置路径：网络配置 → OneBot11。HTTP Server 和 HTTP 
 消息形态相关选项：
 • 防抖延迟：收到消息后先等待，把对方短时间连续发的几条合并成一次输入，避免“发两句回两次”。随机模式会在 3、4、5、6 秒中选择。
 • 回复延迟：模型生成后，发送前再等待一小段时间，只影响发送时机。
+• 引用回复：默认开启时，群聊普通回复会引用触发回复的那条消息；私聊只有对方已经引用消息时才会引用。关闭后仍保留对方主动引用的目标。
 • 上下文条数：每次请求带入的近期消息数量。太少容易接不上话，太多会增加延迟和费用。
 • 表情回应：是对已有消息添加 reaction，不是发送一个新的表情气泡。
 • 显示输入状态：等待和生成期间显示“正在输入”；关闭后不会发送这个状态。
@@ -1580,7 +1582,11 @@ class ControlPanel(tk.Tk):
         self.memory_db = self._entry(behavior, 5, "持久化记忆库", "MEMORY_DB", "", column=2, input_columnspan=2)
         self.reaction_mode = self._combo(behavior, 6, 2, "表情回应", "REACTION_MODE", ("off", "like"), "off")
         self.typing = tk.BooleanVar(value=self._value("TYPING_STATUS", "true").lower() in {"1", "true", "yes", "on"})
-        self._checkbutton(behavior, 6, 0, "显示输入状态", self.typing)
+        self._checkbutton(behavior, 6, 0, "显示输入状态", self.typing, columnspan=1)
+        self.reply_to_message = tk.BooleanVar(
+            value=self._value("REPLY_TO_MESSAGE", "true").lower() in {"1", "true", "yes", "on"}
+        )
+        self._checkbutton(behavior, 6, 1, "引用回复", self.reply_to_message, "REPLY_TO_MESSAGE", columnspan=1)
         self.tools_enabled = tk.BooleanVar(value=self._value("TOOLS_ENABLED", "false").lower() in {"1", "true", "yes", "on"})
         self._tool_selector(behavior, 7, 0)
         self.active_interval = self._entry(behavior, 8, "主动消息间隔(分钟)", "ACTIVE_INTERVAL_MINUTES", "60")
@@ -2091,6 +2097,7 @@ class ControlPanel(tk.Tk):
             "GROUP_MODE": self.group_mode.get().strip(), "DECISION_MODE": self.decision_mode.get().strip(), "GROUP_ALLOWLIST": self.group_allowlist.get().strip(), "BOT_QQ": self.bot_qq.get().strip(), "BOT_NAMES": self.bot_names.get().strip(),
             "DEBOUNCE_SECONDS": self.debounce.get().strip(), "FOLLOWUP_SECONDS": self.followup.get().strip(), "CONTEXT_MESSAGES": self.context_messages.get().strip(), "MEMORY_DB": self.memory_db.get().strip(),
             "REACTION_MODE": self.reaction_mode.get().strip(),
+            "REPLY_TO_MESSAGE": "true" if self.reply_to_message.get() else "false",
             "ACTIVE_INTERVAL_MINUTES": self.active_interval.get().strip(),
             "ACTIVE_PRIVATE_ENABLED": "true" if self.active_private_enabled.get() else "false",
             "ACTIVE_PRIVATE_TARGET_ID": self.active_private_target_id.get().strip(),

@@ -42,6 +42,12 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(settings.followup_seconds, 30.0)
         self.assertFalse(settings.typing_status)
 
+    def test_group_reply_to_message_defaults_on_and_can_be_disabled(self) -> None:
+        self.assertTrue(Settings.from_values({}).reply_to_message)
+        self.assertFalse(Settings.from_values({"REPLY_TO_MESSAGE": "false"}).reply_to_message)
+        self.assertFalse(Settings.from_values({"QUOTE_REPLIES": "false"}).reply_to_message)
+        self.assertFalse(Settings.from_values({"YMM_NAPCAT_REPLY_TO_MESSAGE": "false"}).reply_to_message)
+
     def test_invalid_group_allowlist_is_rejected(self) -> None:
         with self.assertRaises(ConfigError):
             Settings.from_values({"GROUP_ALLOWLIST": "friends"})

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping
@@ -8,6 +9,17 @@ from typing import Any, Mapping
 
 class EventError(ValueError):
     """Raised when a OneBot event cannot be normalized."""
+
+
+_CQ_REPLY_ID_RE = re.compile(r"\[CQ:reply\b[^\]]*\bid=([^,\]]+)", re.IGNORECASE)
+
+
+def _reply_id_from_raw_message(raw_message: Any) -> str | None:
+    """Recover a quote target when the HTTP Client is configured for string messages."""
+    if not isinstance(raw_message, str):
+        return None
+    match = _CQ_REPLY_ID_RE.search(raw_message)
+    return match.group(1).strip() or None if match else None
 
 
 def _as_text(segment: Mapping[str, Any]) -> str:
@@ -75,13 +87,28 @@ class NormalizedMessage:
         for segment in segments:
             segment_type = segment["type"]
             if segment_type == "text":
-                text_parts.append(_as_text(segment))
+                text_parts.append(_CQ_REPLY_ID_RE.sub("", _as_text(segment)))
             elif segment_type == "image":
                 text_parts.append("[图片]")
             elif segment_type == "at":
                 text_parts.append(f"[@{segment.get('data', {}).get('qq', '')}]")
         reply = event.get("reply")
         reply_id = reply.get("id") if isinstance(reply, Mapping) else None
+        if reply_id is None:
+            # OneBot commonly represents a quoted message as a reply segment
+            # inside ``message`` instead of the optional top-level field.
+            for segment in segments:
+                if segment.get("type") != "reply":
+                    continue
+                data = segment.get("data", {})
+                if isinstance(data, Mapping):
+                    reply_id = data.get("id") or data.get("message_id")
+                if reply_id is not None:
+                    break
+        if reply_id is None:
+            # NapCat can still emit the legacy CQ string even when the UI says
+            # Array. Preserve the target so the response can quote it too.
+            reply_id = _reply_id_from_raw_message(event.get("raw_message"))
         event_id = str(event.get("self_id", "")) + ":" + str(event.get("message_id", time.time_ns()))
         return cls(
             event_id=event_id,

@@ -465,6 +465,52 @@ class BridgeTests(unittest.TestCase):
         bridge.shutdown()
         self.assertTrue(remote.released)
 
+    def test_local_first_does_not_wait_for_remote_context_when_local_context_exists(self):
+        class SlowRemoteMemory:
+            def __init__(self):
+                self.load_context_calls = 0
+                self.load_facts_calls = 0
+
+            def ingest(self, _message):
+                return True
+
+            def load_context(self, _conversation_key, _limit):
+                self.load_context_calls += 1
+                return SimpleNamespace(messages=(), summary="", facts=())
+
+            def load_facts(self, _scope_key):
+                self.load_facts_calls += 1
+                return []
+
+        settings = Settings.from_values(
+            {
+                "LLM_API_KEY": "key",
+                "LLM_BASE_URL": "https://example.test/v1",
+                "LLM_MODEL": "chat",
+                "REMOTE_MEMORY_MODE": "local_first",
+            }
+        )
+        remote = SlowRemoteMemory()
+        bridge = Bridge(
+            settings,
+            napcat=FakeNapCat(),
+            remote_memory=remote,
+            bot_request=lambda _payload: {"bubbles": ["回答"]},
+        )
+        first = {
+            "post_type": "message",
+            "message_type": "private",
+            "user_id": 123,
+            "message_id": 301,
+            "message": "第一句",
+        }
+        second = {**first, "message_id": 302, "message": "第二句"}
+        self.assertTrue(bridge.handle_event(first)["handled"])
+        self.assertTrue(bridge.handle_event(second)["handled"])
+        bridge.shutdown()
+        self.assertEqual(remote.load_context_calls, 1)
+        self.assertEqual(remote.load_facts_calls, 1)
+
     def test_group_smart_mode_continues_after_a_reply(self):
         settings = Settings.from_values(
             {
@@ -540,6 +586,103 @@ class BridgeTests(unittest.TestCase):
         }
         self.assertTrue(bridge.handle_event(event)["handled"])
         self.assertEqual(napcat.quoted, [("group", "999", "21")])
+
+    def test_normal_group_reply_quotes_triggering_message_by_default(self):
+        settings = self.settings()
+        napcat = FakeNapCat()
+        bridge = Bridge(settings, napcat=napcat, bot_request=lambda _payload: {"bubbles": ["回答"]})
+        result = bridge.handle_event(
+            {
+                "post_type": "message",
+                "message_type": "group",
+                "group_id": 999,
+                "user_id": 123,
+                "message_id": 25,
+                "message": "[@bot] 普通问题",
+                "to_me": True,
+            }
+        )
+        self.assertTrue(result["handled"])
+        self.assertEqual(napcat.quoted, [("group", "999", "25")])
+
+    def test_only_first_bubble_quotes_triggering_message(self):
+        settings = self.settings()
+        napcat = FakeNapCat()
+        bridge = Bridge(
+            settings,
+            napcat=napcat,
+            bot_request=lambda _payload: {"bubbles": ["第一句", "第二句", "第三句"]},
+        )
+        result = bridge.handle_event(
+            {
+                "post_type": "message",
+                "message_type": "group",
+                "group_id": 999,
+                "user_id": 123,
+                "message_id": 27,
+                "message": "[@bot] 多气泡回复",
+                "to_me": True,
+            }
+        )
+        self.assertTrue(result["handled"])
+        self.assertEqual(napcat.quoted, [("group", "999", "27")])
+        self.assertEqual(
+            napcat.sent,
+            [
+                ("group", "999", "第一句"),
+                ("group", "999", "第二句"),
+                ("group", "999", "第三句"),
+            ],
+        )
+
+    def test_normal_group_reply_quote_can_be_disabled(self):
+        settings = Settings.from_values(
+            {
+                "LLM_API_KEY": "key",
+                "LLM_BASE_URL": "https://example.test/v1",
+                "LLM_MODEL": "chat",
+                "GROUP_MODE": "mention",
+                "GROUP_ALLOWLIST": "999",
+                "REPLY_TO_MESSAGE": "false",
+            }
+        )
+        napcat = FakeNapCat()
+        bridge = Bridge(settings, napcat=napcat, bot_request=lambda _payload: {"bubbles": ["回答"]})
+        result = bridge.handle_event(
+            {
+                "post_type": "message",
+                "message_type": "group",
+                "group_id": 999,
+                "user_id": 123,
+                "message_id": 26,
+                "message": "[@bot] 普通问题",
+                "to_me": True,
+            }
+        )
+        self.assertTrue(result["handled"])
+        self.assertEqual(napcat.quoted, [])
+
+    def test_later_quoted_message_in_debounced_batch_keeps_quote_target(self):
+        settings = self.settings()
+        napcat = FakeNapCat()
+        bridge = Bridge(settings, napcat=napcat, bot_request=lambda _payload: {"bubbles": ["reply"]})
+        first = {
+            "post_type": "message",
+            "message_type": "private",
+            "user_id": 123,
+            "message_id": 30,
+            "message": "first",
+        }
+        second = {
+            **first,
+            "message_id": 31,
+            "message": [{"type": "reply", "data": {"id": "30"}}, {"type": "text", "data": {"text": "follow-up"}}],
+        }
+        self.assertTrue(bridge.enqueue_event(first)["accepted"])
+        self.assertTrue(bridge.enqueue_event(second)["accepted"])
+        bridge._flush_batch("private:123")
+        bridge.shutdown()
+        self.assertEqual(napcat.quoted, [("private", "123", "30")])
 
     def test_image_segments_are_resolved_before_bot_request(self):
         settings = Settings.from_values(
@@ -620,6 +763,45 @@ class BridgeTests(unittest.TestCase):
             }
         )
         self.assertTrue(result["handled"])
+        self.assertEqual(napcat.reactions, [("9", "128077")])
+
+    def test_reactions_are_rate_limited_per_conversation(self):
+        settings = Settings.from_values(
+            {
+                "LLM_API_KEY": "key",
+                "LLM_BASE_URL": "https://example.test/v1",
+                "LLM_MODEL": "chat",
+                "REACTION_MODE": "like",
+            }
+        )
+        napcat = FakeNapCat()
+        bridge = Bridge(
+            settings,
+            napcat=napcat,
+            bot_request=lambda _payload: {"bubbles": [], "reaction_id": "128077"},
+        )
+        first = bridge.handle_event(
+            {
+                "post_type": "message",
+                "message_type": "private",
+                "user_id": 123,
+                "message_id": 9,
+                "message": "first",
+            }
+        )
+        second = bridge.handle_event(
+            {
+                "post_type": "message",
+                "message_type": "private",
+                "user_id": 123,
+                "message_id": 10,
+                "message": "second",
+            }
+        )
+        bridge.shutdown()
+        self.assertTrue(first["handled"])
+        self.assertFalse(second["handled"])
+        self.assertEqual(second["reason"], "empty_reply")
         self.assertEqual(napcat.reactions, [("9", "128077")])
 
     def test_model_decision_can_ignore_an_unaddressed_smart_group_message(self):

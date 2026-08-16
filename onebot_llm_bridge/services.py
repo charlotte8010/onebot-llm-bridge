@@ -269,7 +269,9 @@ class BotService:
             "Never use a fixed bubble or punctuation template. Do not add exclamation marks or parentheses "
             "unless the current emotion clearly calls for them. In particular, do not make the first bubble "
             "end with repeated exclamation marks and the second bubble end with parentheses. "
-            "When a simple QQ reaction is more natural than text, you may append "
+            "A QQ reaction is optional and should be rare: use it only for an especially clear "
+            "emotional beat, roughly once every several replies at most, never on consecutive turns, "
+            "and prefer normal text whenever both would work. If you use one, append "
             "[[REACTION:emoji_name]] using one of the catalog names below."
         )
         active_message = bool(payload.get("active"))
@@ -559,6 +561,8 @@ class Bridge:
     REMOTE_CACHE_SECONDS = 8.0
     EVENT_DEDUPE_SECONDS = 300.0
     AUTO_REPLY_COOLDOWN_SECONDS = 300.0
+    # Reactions should feel occasional, not like a second reply channel.
+    REACTION_COOLDOWN_SECONDS = 60.0
     MAX_SEEN_EVENTS = 4096
     AUTO_REPLY_MARKERS = (
         "自动回复",
@@ -629,6 +633,7 @@ class Bridge:
         self._summary_timers: dict[str, threading.Timer] = {}
         self._seen_events: OrderedDict[str, float] = OrderedDict()
         self._auto_reply_seen: OrderedDict[str, float] = OrderedDict()
+        self._reaction_last_at: OrderedDict[str, float] = OrderedDict()
         self._metrics_lock = threading.Lock()
         self._metrics: dict[str, int | float] = {
             "events_received": 0,
@@ -731,6 +736,25 @@ class Bridge:
             while len(self._auto_reply_seen) > self.MAX_SEEN_EVENTS:
                 self._auto_reply_seen.popitem(last=False)
         return False
+
+    def _claim_reaction_slot(self, conversation_key: str) -> bool:
+        """Limit reactions per conversation so the model cannot spam them."""
+        now = time.monotonic()
+        with self._state_lock:
+            while self._reaction_last_at:
+                oldest_key, last_at = next(iter(self._reaction_last_at.items()))
+                if now - last_at < self.REACTION_COOLDOWN_SECONDS:
+                    break
+                self._reaction_last_at.pop(oldest_key, None)
+            last_at = self._reaction_last_at.get(conversation_key)
+            if last_at is not None and now - last_at < self.REACTION_COOLDOWN_SECONDS:
+                self._reaction_last_at.move_to_end(conversation_key)
+                return False
+            self._reaction_last_at[conversation_key] = now
+            self._reaction_last_at.move_to_end(conversation_key)
+            while len(self._reaction_last_at) > self.MAX_SEEN_EVENTS:
+                self._reaction_last_at.popitem(last=False)
+        return True
 
     def _release_remote_lease_after_error(self, conversation_key: str) -> None:
         """Best-effort cleanup for exceptions that escape the batch worker."""
@@ -932,6 +956,9 @@ class Bridge:
                 release_lease()
                 return {"handled": False, "reason": routing["reason"] or "model_decision_ignore"}
             if routing["action"] == "emoji_react":
+                if not self._claim_reaction_slot(first.conversation_key):
+                    release_lease()
+                    return {"handled": False, "reason": "reaction_rate_limited"}
                 try:
                     self.napcat.set_msg_emoji_like(routing["target_message_id"], routing["emoji_id"])
                 except NapCatError as exc:
@@ -945,6 +972,17 @@ class Bridge:
                 reply_to = routing["target_message_id"]
             elif mode == "smart_decision":
                 mode = "reply"
+            # Match the old bridge: a normal group reply is attached to the
+            # triggering message, while private messages stay unobtrusive.
+            if (
+                reply_to is None
+                and mode != "ignore"
+                and first.conversation_type == "group"
+                and self.settings.reply_to_message
+                and first.message_id
+            ):
+                mode = "quote_reply"
+                reply_to = first.message_id
             images: list[str] = []
             if self.settings.vision_mode != "off":
                 segments = [segment for item in messages for segment in item.segments]
@@ -952,7 +990,18 @@ class Bridge:
             model_context = list(context)
             summary = ""
             remote_facts: list[str] = []
-            if self.remote_memory is not None:
+            # In local-first mode, do not put a Supabase round trip on every
+            # reply once this conversation is already present locally. The
+            # remote store remains a fallback after restart and is always
+            # consulted in coordinated mode.
+            read_remote_context = (
+                self.remote_memory is not None
+                and (
+                    self.settings.remote_memory_mode == "coordinated"
+                    or not model_context
+                )
+            )
+            if read_remote_context:
                 try:
                     remote_context = self._cached_remote_context(
                         first.conversation_key,
@@ -994,6 +1043,9 @@ class Bridge:
             if not bubbles:
                 reaction_id = str(result.get("reaction_id", "")).strip()
                 if reaction_id and self.settings.reaction_mode == "like":
+                    if not self._claim_reaction_slot(first.conversation_key):
+                        reaction_id = ""
+                if reaction_id and self.settings.reaction_mode == "like":
                     try:
                         self.napcat.set_msg_emoji_like(first.message_id, reaction_id)
                     except NapCatError as exc:
@@ -1004,19 +1056,36 @@ class Bridge:
                 return {"handled": False, "reason": "empty_reply"}
             reaction_id = str(result.get("reaction_id", "")).strip()
             if reaction_id and self.settings.reaction_mode == "like":
-                try:
-                    self.napcat.set_msg_emoji_like(first.message_id, reaction_id)
-                except NapCatError as exc:
-                    print(f"reaction failed: {type(exc).__name__}")
-            for bubble in bubbles:
+                if self._claim_reaction_slot(first.conversation_key):
+                    try:
+                        self.napcat.set_msg_emoji_like(first.message_id, reaction_id)
+                    except NapCatError as exc:
+                        print(f"reaction failed: {type(exc).__name__}")
+                else:
+                    reaction_id = ""
+            if mode == "quote_reply" and reply_to:
+                print(f"quote reply: {first.conversation_key} -> message {reply_to}")
+            for index, bubble in enumerate(bubbles):
+                # Quote only the opening bubble of a response turn. Repeating
+                # the same quote on every bubble makes one reply look like a
+                # stack of unrelated replies in QQ.
+                bubble_reply_to = reply_to if index == 0 else None
                 if first.conversation_type == "private":
-                    if mode == "quote_reply":
-                        send_result = self.napcat.send_private(first.conversation_id, bubble, reply_to=reply_to)
+                    if mode == "quote_reply" and bubble_reply_to:
+                        send_result = self.napcat.send_private(
+                            first.conversation_id,
+                            bubble,
+                            reply_to=bubble_reply_to,
+                        )
                     else:
                         send_result = self.napcat.send_private(first.conversation_id, bubble)
                 else:
-                    if mode == "quote_reply":
-                        send_result = self.napcat.send_group(first.conversation_id, bubble, reply_to=reply_to)
+                    if mode == "quote_reply" and bubble_reply_to:
+                        send_result = self.napcat.send_group(
+                            first.conversation_id,
+                            bubble,
+                            reply_to=bubble_reply_to,
+                        )
                     else:
                         send_result = self.napcat.send_group(first.conversation_id, bubble)
                 self._record_outbound_message(
@@ -1353,6 +1422,11 @@ class Bridge:
                 self._schedule_batch(key, self.settings.debounce_delay())
             else:
                 batch.messages.append(message)
+                # A later message in the debounce window may be the one the
+                # user actually quoted. Keep that target for the merged reply.
+                if message.reply_to:
+                    batch.reply_to = message.reply_to
+                    batch.mode = "quote_reply"
                 if message.conversation_type == "private":
                     elapsed = time.monotonic() - batch.created_at
                     remaining = max(0.0, self.MAX_BATCH_WINDOW_SECONDS - elapsed)

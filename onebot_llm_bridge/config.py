@@ -121,6 +121,7 @@ class Settings:
     group_mode: str = "mention"
     decision_mode: str = "heuristic"
     group_allowlist: frozenset[str] = frozenset()
+    reply_to_message: bool = True
     debounce_seconds: float = 3.0
     debounce_random: bool = False
     followup_seconds: float = 120.0
@@ -186,6 +187,18 @@ class Settings:
         tool_allowlist = tuple(
             item.strip().lower() for item in _text(values, "TOOL_ALLOWLIST").split(",") if item.strip()
         )
+        # Keep the old personal bridge behavior as the default: group replies
+        # quote the message that caused the reply. QUOTE_REPLIES is accepted
+        # as an alias for configs created by early generic releases.
+        reply_to_message = _enabled(
+            values,
+            "REPLY_TO_MESSAGE",
+            _enabled(
+                values,
+                "QUOTE_REPLIES",
+                _enabled(values, "YMM_NAPCAT_REPLY_TO_MESSAGE", True),
+            ),
+        )
         debounce_value = _text(values, "DEBOUNCE_SECONDS", "3")
         debounce_random = debounce_value.lower() == "random"
         debounce_seconds = (
@@ -250,6 +263,7 @@ class Settings:
             group_mode=group_mode,
             decision_mode=decision_mode,
             group_allowlist=allowlist,
+            reply_to_message=reply_to_message,
             debounce_seconds=debounce_seconds,
             debounce_random=debounce_random,
             followup_seconds=_float(values, "FOLLOWUP_SECONDS", 120.0, 0.0, 3600.0),

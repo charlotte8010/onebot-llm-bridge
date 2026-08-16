@@ -5,7 +5,14 @@ from onebot_llm_bridge.models import NormalizedMessage
 from onebot_llm_bridge.policy import decide_reply
 
 
-def message(*, kind: str = "private", group_id: str = "", text: str = "hello", to_me: bool = False) -> NormalizedMessage:
+def message(
+    *,
+    kind: str = "private",
+    group_id: str = "",
+    text: str = "hello",
+    to_me: bool = False,
+    reply_to: str | None = None,
+) -> NormalizedMessage:
     return NormalizedMessage(
         event_id="event",
         timestamp=1,
@@ -15,6 +22,7 @@ def message(*, kind: str = "private", group_id: str = "", text: str = "hello", t
         sender_name="friend",
         message_id="1",
         text=text,
+        reply_to=reply_to,
         to_me=to_me,
     )
 
@@ -44,6 +52,34 @@ class FormattingAndPolicyTests(unittest.TestCase):
     def test_private_messages_reply(self) -> None:
         decision = decide_reply(message(), group_mode="mention", group_allowlist=frozenset())
         self.assertTrue(decision.should_reply)
+
+    def test_private_message_reply_keeps_quote_target(self) -> None:
+        decision = decide_reply(
+            message(reply_to="42"),
+            group_mode="mention",
+            group_allowlist=frozenset(),
+        )
+        self.assertTrue(decision.should_reply)
+        self.assertEqual(decision.mode, "quote_reply")
+
+    def test_group_all_keeps_quote_target(self) -> None:
+        decision = decide_reply(
+            message(kind="group", group_id="123", reply_to="42"),
+            group_mode="all",
+            group_allowlist=frozenset({"123"}),
+        )
+        self.assertTrue(decision.should_reply)
+        self.assertEqual(decision.mode, "quote_reply")
+
+    def test_smart_active_topic_keeps_quote_target(self) -> None:
+        decision = decide_reply(
+            message(kind="group", group_id="123", text="继续", reply_to="42"),
+            group_mode="smart",
+            group_allowlist=frozenset({"123"}),
+            active_topic=True,
+        )
+        self.assertTrue(decision.should_reply)
+        self.assertEqual(decision.mode, "quote_reply")
 
     def test_group_requires_allowlist_and_address(self) -> None:
         group = message(kind="group", group_id="999", to_me=True)
