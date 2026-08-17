@@ -8,11 +8,14 @@ import unittest
 from email.message import Message
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 from onebot_llm_bridge.config import Settings
 from onebot_llm_bridge.models import NormalizedMessage
 from onebot_llm_bridge.services import (
     Bridge,
+    BridgeHTTPServer,
     JsonHandler,
     _event_auth_matches,
     _merge_context_messages,
@@ -111,6 +114,35 @@ class BridgeTests(unittest.TestCase):
     def test_event_auth_keeps_bearer_compatibility(self):
         body = b"{}"
         self.assertTrue(_event_auth_matches("Bearer event-token", "", "event-token", body))
+
+    def test_authenticated_shutdown_request_stops_bridge_http_server(self):
+        bridge = Bridge(self.settings(), napcat=FakeNapCat(), bot_request=lambda _payload: {})
+        server = BridgeHTTPServer(("127.0.0.1", 0), bridge, "event-token")
+        worker = threading.Thread(target=server.serve_forever)
+        worker.start()
+        request = Request(
+            f"http://127.0.0.1:{server.server_port}/shutdown",
+            data=b"{}",
+            headers={"Authorization": "Bearer event-token", "Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            try:
+                with urlopen(request, timeout=1.0) as response:
+                    status = response.status
+            except HTTPError as exc:
+                status = exc.code
+                exc.close()
+            if status != 200:
+                server.shutdown()
+            worker.join(1.0)
+            self.assertEqual(status, 200)
+            self.assertFalse(worker.is_alive())
+        finally:
+            server.shutdown()
+            server.server_close()
+            bridge.shutdown()
+            worker.join(1.0)
 
     def settings(self):
         return Settings.from_values(
@@ -329,6 +361,86 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(calls[0]["message"], "第一句\n第二句")
         self.assertEqual(napcat.sent, [("private", "123", "合并回复")])
 
+    def test_shutdown_flushes_messages_still_waiting_in_debounce_window(self):
+        settings = Settings.from_values(
+            {
+                "LLM_API_KEY": "key",
+                "LLM_BASE_URL": "https://example.test/v1",
+                "LLM_MODEL": "chat",
+                "DEBOUNCE_SECONDS": "60",
+            }
+        )
+        napcat = FakeNapCat()
+        bridge = Bridge(
+            settings,
+            napcat=napcat,
+            bot_request=lambda _payload: {"bubbles": ["关机前回复"]},
+        )
+        accepted = bridge.enqueue_event(
+            {
+                "post_type": "message",
+                "message_type": "private",
+                "user_id": 123,
+                "message_id": 203,
+                "message": "别漏掉这句",
+            }
+        )
+        self.assertTrue(accepted["accepted"])
+        self.assertEqual(napcat.sent, [])
+
+        bridge.shutdown()
+
+        self.assertEqual(napcat.sent, [("private", "123", "关机前回复")])
+
+    def test_shutdown_waits_for_inflight_remote_memory_write(self):
+        class BlockingRemoteMemory:
+            def __init__(self):
+                self.started = threading.Event()
+                self.release = threading.Event()
+                self.completed = threading.Event()
+
+            def ingest(self, _message):
+                self.started.set()
+                self.release.wait(1.0)
+                self.completed.set()
+                return True
+
+        remote = BlockingRemoteMemory()
+        bridge = Bridge(
+            self.settings(),
+            napcat=FakeNapCat(),
+            remote_memory=remote,
+            bot_request=lambda _payload: {},
+        )
+        bridge._ingest_remote(
+            NormalizedMessage(
+                event_id="event-remote-shutdown",
+                timestamp=1,
+                conversation_type="private",
+                conversation_id="123",
+                sender_id="123",
+                sender_name="friend",
+                message_id="204",
+                text="等待写入",
+            )
+        )
+        self.assertTrue(remote.started.wait(1.0))
+        shutdown_finished = threading.Event()
+
+        def stop_bridge():
+            bridge.shutdown()
+            shutdown_finished.set()
+
+        worker = threading.Thread(target=stop_bridge)
+        worker.start()
+        try:
+            self.assertFalse(shutdown_finished.wait(0.05))
+        finally:
+            remote.release.set()
+            self.assertTrue(shutdown_finished.wait(1.0))
+            worker.join(1.0)
+        self.assertTrue(remote.completed.is_set())
+
     def test_duplicate_onebot_event_is_ignored(self):
         settings = Settings.from_values(
             {
@@ -364,6 +476,167 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(napcat.sent, [("private", "123", "只回一次")])
 
+    def test_completed_event_is_not_replied_again_after_bridge_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings.from_values(
+                {
+                    "LLM_API_KEY": "key",
+                    "LLM_BASE_URL": "https://example.test/v1",
+                    "LLM_MODEL": "chat",
+                    "MEMORY_DB": str(Path(directory) / "memory.sqlite3"),
+                }
+            )
+            event = {
+                "post_type": "message",
+                "message_type": "private",
+                "self_id": 100,
+                "user_id": 123,
+                "message_id": 205,
+                "message": "只应该回复一次",
+            }
+            first_napcat = FakeNapCat()
+            first = Bridge(
+                settings,
+                napcat=first_napcat,
+                bot_request=lambda _payload: {"bubbles": ["第一次回复"]},
+            )
+            self.assertTrue(first.handle_event(event)["handled"])
+            first.shutdown()
+
+            second_calls = []
+            second_napcat = FakeNapCat()
+            second = Bridge(
+                settings,
+                napcat=second_napcat,
+                bot_request=lambda payload: second_calls.append(payload) or {"bubbles": ["重复回复"]},
+            )
+            try:
+                result = second.handle_event(event)
+                self.assertFalse(result["handled"])
+                self.assertEqual(result["reason"], "duplicate_event")
+                self.assertEqual(second_calls, [])
+                self.assertEqual(second_napcat.sent, [])
+            finally:
+                second.shutdown()
+
+    def test_completed_debounced_event_is_not_accepted_after_bridge_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings.from_values(
+                {
+                    "LLM_API_KEY": "key",
+                    "LLM_BASE_URL": "https://example.test/v1",
+                    "LLM_MODEL": "chat",
+                    "MEMORY_DB": str(Path(directory) / "memory.sqlite3"),
+                    "DEBOUNCE_SECONDS": "60",
+                }
+            )
+            event = {
+                "post_type": "message",
+                "message_type": "private",
+                "self_id": 100,
+                "user_id": 123,
+                "message_id": 206,
+                "message": "防抖后也只回复一次",
+            }
+            first = Bridge(
+                settings,
+                napcat=FakeNapCat(),
+                bot_request=lambda _payload: {"bubbles": ["第一次回复"]},
+            )
+            self.assertTrue(first.enqueue_event(event)["accepted"])
+            first.shutdown()
+
+            second_calls = []
+            second_napcat = FakeNapCat()
+            second = Bridge(
+                settings,
+                napcat=second_napcat,
+                bot_request=lambda payload: second_calls.append(payload) or {"bubbles": ["重复回复"]},
+            )
+            try:
+                result = second.enqueue_event(event)
+                self.assertFalse(result["accepted"])
+                self.assertEqual(result["reason"], "duplicate_event")
+                self.assertEqual(second_calls, [])
+                self.assertEqual(second_napcat.sent, [])
+            finally:
+                second.shutdown()
+
+    def test_passive_group_event_is_not_recorded_again_after_bridge_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings.from_values(
+                {
+                    "LLM_API_KEY": "key",
+                    "LLM_BASE_URL": "https://example.test/v1",
+                    "LLM_MODEL": "chat",
+                    "MEMORY_DB": str(Path(directory) / "memory.sqlite3"),
+                    "GROUP_MODE": "mention",
+                    "GROUP_ALLOWLIST": "999",
+                }
+            )
+            event = {
+                "post_type": "message",
+                "message_type": "group",
+                "self_id": 100,
+                "group_id": 999,
+                "user_id": 123,
+                "message_id": 207,
+                "message": "只是群里的普通聊天",
+            }
+            first = Bridge(settings, napcat=FakeNapCat(), bot_request=lambda _payload: {})
+            self.assertEqual(first.handle_event(event)["reason"], "not_addressed")
+            first.shutdown()
+
+            second = Bridge(settings, napcat=FakeNapCat(), bot_request=lambda _payload: {})
+            try:
+                result = second.handle_event(event)
+                self.assertEqual(result["reason"], "duplicate_event")
+                with second._state_lock:
+                    context = list(second._context_for("group:999"))
+                self.assertEqual([item.message_id for item in context], ["207"])
+            finally:
+                second.shutdown()
+
+    def test_failed_event_can_be_retried_after_bridge_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings.from_values(
+                {
+                    "LLM_API_KEY": "key",
+                    "LLM_BASE_URL": "https://example.test/v1",
+                    "LLM_MODEL": "chat",
+                    "MEMORY_DB": str(Path(directory) / "memory.sqlite3"),
+                }
+            )
+            event = {
+                "post_type": "message",
+                "message_type": "private",
+                "self_id": 100,
+                "user_id": 123,
+                "message_id": 211,
+                "message": "失败后需要重试",
+            }
+            first = Bridge(
+                settings,
+                napcat=FakeNapCat(),
+                bot_request=lambda _payload: (_ for _ in ()).throw(RuntimeError("model unavailable")),
+            )
+            with self.assertRaises(RuntimeError):
+                first.handle_event(event)
+            first.shutdown()
+
+            second_napcat = FakeNapCat()
+            second = Bridge(
+                settings,
+                napcat=second_napcat,
+                bot_request=lambda _payload: {"bubbles": ["重试成功"]},
+            )
+            try:
+                result = second.handle_event(event)
+                self.assertTrue(result["handled"])
+                self.assertEqual(second_napcat.sent, [("private", "123", "重试成功")])
+            finally:
+                second.shutdown()
+
     def test_repeated_user_auto_reply_is_handled_once(self):
         settings = self.settings()
         napcat = FakeNapCat()
@@ -392,6 +665,50 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(result["reason"], "repeated_auto_reply")
         self.assertEqual(len(calls), 1)
         self.assertEqual(napcat.sent, [("private", "123", "收到")])
+
+    def test_suppressed_auto_reply_is_not_handled_after_bridge_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings.from_values(
+                {
+                    "LLM_API_KEY": "key",
+                    "LLM_BASE_URL": "https://example.test/v1",
+                    "LLM_MODEL": "chat",
+                    "MEMORY_DB": str(Path(directory) / "memory.sqlite3"),
+                }
+            )
+            first_event = {
+                "post_type": "message",
+                "message_type": "private",
+                "user_id": 123,
+                "message_id": 208,
+                "message": "我现在有事不在，一会再联系",
+            }
+            suppressed_event = {
+                **first_event,
+                "message_id": 209,
+                "message": "暂时无法回复，稍后联系",
+            }
+            first = Bridge(
+                settings,
+                napcat=FakeNapCat(),
+                bot_request=lambda _payload: {"bubbles": ["收到"]},
+            )
+            self.assertTrue(first.handle_event(first_event)["handled"])
+            self.assertEqual(first.handle_event(suppressed_event)["reason"], "repeated_auto_reply")
+            first.shutdown()
+
+            second_calls = []
+            second = Bridge(
+                settings,
+                napcat=FakeNapCat(),
+                bot_request=lambda payload: second_calls.append(payload) or {"bubbles": ["不应回复"]},
+            )
+            try:
+                result = second.handle_event(suppressed_event)
+                self.assertEqual(result["reason"], "duplicate_event")
+                self.assertEqual(second_calls, [])
+            finally:
+                second.shutdown()
 
     def test_auto_reply_event_subtype_is_handled_once(self):
         settings = self.settings()
@@ -511,6 +828,51 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(remote.load_context_calls, 1)
         self.assertEqual(remote.load_facts_calls, 1)
 
+    def test_summary_check_is_scheduled_before_local_context_reaches_remote_threshold(self):
+        class SummaryRemoteMemory:
+            def ingest(self, _message):
+                return True
+
+            def load_context(self, _conversation_key, _limit):
+                return SimpleNamespace(messages=(), summary="", facts=())
+
+            def load_facts(self, _scope_key):
+                return []
+
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings.from_values(
+                {
+                    "LLM_API_KEY": "key",
+                    "LLM_BASE_URL": "https://example.test/v1",
+                    "LLM_MODEL": "chat",
+                    "MEMORY_DB": str(Path(directory) / "memory.sqlite3"),
+                    "SUMMARY_ENABLED": "true",
+                    "SUMMARY_DELAY_SECONDS": "60",
+                    "SUMMARY_MIN_MESSAGES": "40",
+                    "CONTEXT_MESSAGES": "20",
+                }
+            )
+            bridge = Bridge(
+                settings,
+                napcat=FakeNapCat(),
+                remote_memory=SummaryRemoteMemory(),
+                bot_request=lambda _payload: {"bubbles": ["回答"]},
+            )
+            try:
+                result = bridge.handle_event(
+                    {
+                        "post_type": "message",
+                        "message_type": "private",
+                        "user_id": 123,
+                        "message_id": 303,
+                        "message": "触发总结检查",
+                    }
+                )
+                self.assertTrue(result["handled"])
+                self.assertIn("private:123", bridge._summary_timers)
+            finally:
+                bridge.shutdown()
+
     def test_group_smart_mode_continues_after_a_reply(self):
         settings = Settings.from_values(
             {
@@ -536,6 +898,122 @@ class BridgeTests(unittest.TestCase):
         second = {**first, "message_id": 11, "message": "然后呢", "to_me": False}
         self.assertTrue(bridge.handle_event(first)["handled"])
         self.assertTrue(bridge.handle_event(second)["handled"])
+
+    def test_allowlisted_group_context_keeps_messages_that_do_not_trigger_a_reply(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings.from_values(
+                {
+                    "LLM_API_KEY": "key",
+                    "LLM_BASE_URL": "https://example.test/v1",
+                    "LLM_MODEL": "chat",
+                    "MEMORY_DB": str(Path(directory) / "memory.sqlite3"),
+                    "GROUP_MODE": "mention",
+                    "GROUP_ALLOWLIST": "999",
+                    "DEBOUNCE_SECONDS": "60",
+                }
+            )
+            calls = []
+            bridge = Bridge(
+                settings,
+                napcat=FakeNapCat(),
+                bot_request=lambda payload: calls.append(payload) or {"bubbles": ["收到"]},
+            )
+            passive = {
+                "post_type": "message",
+                "message_type": "group",
+                "group_id": 999,
+                "user_id": 111,
+                "message_id": 401,
+                "message": "今晚要不要一起看电影",
+                "sender": {"user_id": 111, "card": "Alice"},
+            }
+            addressed = {
+                **passive,
+                "user_id": 222,
+                "message_id": 402,
+                "message": "御茗茗你觉得呢",
+                "sender": {"user_id": 222, "card": "Bob"},
+                "to_me": True,
+            }
+            try:
+                ignored = bridge.enqueue_event(passive)
+                accepted = bridge.enqueue_event(addressed)
+                bridge._flush_batch("group:999")
+
+                self.assertFalse(ignored["accepted"])
+                self.assertTrue(accepted["accepted"])
+                self.assertEqual(
+                    [(item["sender_id"], item["sender_name"], item["text"]) for item in calls[0]["context"]],
+                    [("111", "Alice", "今晚要不要一起看电影")],
+                )
+            finally:
+                bridge.shutdown()
+
+    def test_allowlisted_group_context_keeps_bot_own_messages(self):
+        settings = Settings.from_values(
+            {
+                "LLM_API_KEY": "key",
+                "LLM_BASE_URL": "https://example.test/v1",
+                "LLM_MODEL": "chat",
+                "BOT_QQ": "100",
+                "GROUP_MODE": "mention",
+                "GROUP_ALLOWLIST": "999",
+            }
+        )
+        bridge = Bridge(settings, napcat=FakeNapCat(), bot_request=lambda _payload: {})
+        try:
+            result = bridge.enqueue_event(
+                {
+                    "post_type": "message",
+                    "message_type": "group",
+                    "self_id": 100,
+                    "group_id": 999,
+                    "user_id": 100,
+                    "message_id": 403,
+                    "message": "我手动补充一句",
+                    "sender": {"user_id": 100, "card": "御茗茗"},
+                }
+            )
+            with bridge._state_lock:
+                context = list(bridge._context_for("group:999"))
+
+            self.assertFalse(result["accepted"])
+            self.assertEqual(result["reason"], "self_message")
+            self.assertEqual([(item.sender_id, item.text) for item in context], [("100", "我手动补充一句")])
+        finally:
+            bridge.shutdown()
+
+    def test_echoed_outbound_group_message_is_not_recorded_twice(self):
+        settings = Settings.from_values(
+            {
+                "LLM_API_KEY": "key",
+                "LLM_BASE_URL": "https://example.test/v1",
+                "LLM_MODEL": "chat",
+                "BOT_QQ": "100",
+                "GROUP_MODE": "mention",
+                "GROUP_ALLOWLIST": "999",
+            }
+        )
+        bridge = Bridge(settings, napcat=FakeNapCat(), bot_request=lambda _payload: {})
+        try:
+            bridge._record_outbound_message("group", "999", "刚刚的回复", "404")
+            bridge.enqueue_event(
+                {
+                    "post_type": "message",
+                    "message_type": "group",
+                    "self_id": 100,
+                    "group_id": 999,
+                    "user_id": 100,
+                    "message_id": 404,
+                    "message": "刚刚的回复",
+                }
+            )
+            with bridge._state_lock:
+                context = list(bridge._context_for("group:999"))
+
+            self.assertEqual([(item.message_id, item.text) for item in context], [("404", "刚刚的回复")])
+        finally:
+            bridge.shutdown()
 
     def test_group_smart_mode_does_not_continue_into_unrelated_question(self):
         settings = Settings.from_values(
@@ -741,6 +1219,37 @@ class BridgeTests(unittest.TestCase):
             self.assertTrue(result["handled"])
             self.assertEqual(calls, [])
             self.assertEqual(napcat.sent[-1][2], "记住了")
+
+    def test_memory_command_confirmation_is_not_repeated_after_bridge_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings.from_values(
+                {
+                    "LLM_API_KEY": "key",
+                    "LLM_BASE_URL": "https://example.test/v1",
+                    "LLM_MODEL": "chat",
+                    "MEMORY_DB": str(Path(directory) / "memory.sqlite3"),
+                }
+            )
+            event = {
+                "post_type": "message",
+                "message_type": "private",
+                "self_id": 100,
+                "user_id": 123,
+                "message_id": 210,
+                "message": "记住：喜欢记录的地平线",
+            }
+            first = Bridge(settings, napcat=FakeNapCat(), bot_request=lambda _payload: {})
+            self.assertTrue(first.handle_event(event)["handled"])
+            first.shutdown()
+
+            second_napcat = FakeNapCat()
+            second = Bridge(settings, napcat=second_napcat, bot_request=lambda _payload: {})
+            try:
+                result = second.handle_event(event)
+                self.assertEqual(result["reason"], "duplicate_event")
+                self.assertEqual(second_napcat.sent, [])
+            finally:
+                second.shutdown()
 
     def test_reaction_result_uses_napcat_action_when_enabled(self):
         settings = Settings.from_values(

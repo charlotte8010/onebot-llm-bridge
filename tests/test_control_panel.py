@@ -1,9 +1,12 @@
+import inspect
 import os
+import queue
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import control_panel
 from control_panel import HELP_SECTIONS, HELP_TEXTS, OPTION_LABELS, ControlPanel, build_napcat_command, build_napcat_nt_command, build_napcat_utf8_console_command, discover_qq_executable, format_panel_error, generate_service_token, git_output_tail, is_local_service_host, local_url_port, load_env_file, load_theme, parse_git_ahead_behind, parse_port, parse_model_ids, parse_release_version, parse_update_manifest, probe_models, save_env_file, save_theme, service_base_url, vision_status
 
 
@@ -206,6 +209,106 @@ class ControlPanelHelperTests(unittest.TestCase):
         request = opened.call_args.args[0]
         self.assertEqual(request.full_url, "https://example.test/v1/models")
         self.assertEqual(request.get_header("Authorization"), "Bearer secret")
+
+    def test_bridge_shutdown_request_posts_event_token_to_local_service(self):
+        shutdown = getattr(control_panel, "request_bridge_shutdown", None)
+        self.assertIsNotNone(shutdown)
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return b'{"ok":true,"stopping":true}'
+
+        with patch("control_panel.urlopen", return_value=Response()) as opened:
+            payload = shutdown(8766, "event-token", timeout=2.0)
+
+        request = opened.call_args.args[0]
+        self.assertEqual(request.full_url, "http://127.0.0.1:8766/shutdown")
+        self.assertEqual(request.method, "POST")
+        self.assertEqual(request.get_header("Authorization"), "Bearer event-token")
+        self.assertTrue(payload["stopping"])
+
+    def test_service_process_waits_for_graceful_stop_before_terminating(self):
+        parameters = inspect.signature(control_panel.ServiceProcess.stop).parameters
+        self.assertIn("graceful_request", parameters)
+
+        class FakeProcess:
+            def __init__(self):
+                self.exited = False
+                self.terminate_calls = 0
+                self.kill_calls = 0
+                self.wait_timeouts = []
+
+            def poll(self):
+                return 0 if self.exited else None
+
+            def wait(self, timeout):
+                self.wait_timeouts.append(timeout)
+                if not self.exited:
+                    raise AssertionError("graceful request did not stop the process")
+                return 0
+
+            def terminate(self):
+                self.terminate_calls += 1
+
+            def kill(self):
+                self.kill_calls += 1
+
+        process = FakeProcess()
+        service = control_panel.ServiceProcess("bridge", Path("app.py"), queue.Queue())
+        service.process = process
+
+        def graceful_request():
+            process.exited = True
+
+        service.stop(graceful_request=graceful_request, graceful_timeout=12.0)
+
+        self.assertEqual(process.wait_timeouts, [12.0])
+        self.assertEqual(process.terminate_calls, 0)
+        self.assertEqual(process.kill_calls, 0)
+
+    def test_stop_all_gracefully_stops_bridge_before_bot_service(self):
+        events = []
+
+        class Variable:
+            def __init__(self, value):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+        class FakeService:
+            def __init__(self, name):
+                self.name = name
+
+            def stop(self, **kwargs):
+                events.append((self.name, "stop"))
+                graceful_request = kwargs.get("graceful_request")
+                if graceful_request is not None:
+                    graceful_request()
+
+        panel = ControlPanel.__new__(ControlPanel)
+        panel.bridge = FakeService("bridge")
+        panel.bot = FakeService("bot")
+        panel.bridge_port = Variable("8766")
+        panel.event_token = Variable("event-token")
+        panel.timeout = Variable("60")
+        panel._append_log = lambda message: events.append(("log", message))
+
+        with patch(
+            "control_panel.request_bridge_shutdown",
+            side_effect=lambda port, token: events.append(("request", port, token)) or {"ok": True},
+        ):
+            panel.stop_all()
+
+        self.assertEqual(events[0], ("bridge", "stop"))
+        self.assertEqual(events[1], ("request", 8766, "event-token"))
+        self.assertEqual(events[2], ("bot", "stop"))
 
 
 if __name__ == "__main__":

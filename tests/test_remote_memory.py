@@ -1,8 +1,10 @@
 import json
 import unittest
+from io import BytesIO
+from urllib.error import HTTPError
 
 from onebot_llm_bridge.models import NormalizedMessage
-from onebot_llm_bridge.remote_memory import RemoteMemoryStore, SupabaseRestClient
+from onebot_llm_bridge.remote_memory import RemoteMemoryError, RemoteMemoryStore, SupabaseRestClient
 
 
 class FakeResponse:
@@ -17,6 +19,20 @@ class FakeResponse:
 
     def read(self):
         return json.dumps(self.payload, ensure_ascii=False).encode("utf-8")
+
+
+class LeaseErrorClient:
+    def __init__(self, status):
+        self.status = status
+
+    def request(self, method, resource, **_kwargs):
+        if method == "POST" and resource == "bridge_leases":
+            raise RemoteMemoryError(
+                "http_error",
+                f"remote memory returned HTTP {self.status}",
+                status=self.status,
+            )
+        return None
 
 
 class RemoteMemoryTests(unittest.TestCase):
@@ -108,6 +124,41 @@ class RemoteMemoryTests(unittest.TestCase):
         self.store.release_conversation("private:42", "worker-a")
         paths = [request.full_url for request, _timeout in self.requests]
         self.assertTrue(any("bridge_leases" in path for path in paths))
+
+    def test_http_error_preserves_status_for_callers(self):
+        def forbidden(request, timeout):
+            raise HTTPError(
+                request.full_url,
+                403,
+                "Forbidden",
+                {},
+                BytesIO(b'{"message":"permission denied"}'),
+            )
+
+        client = SupabaseRestClient(
+            "https://project.supabase.co",
+            "sb_secret_test",
+            opener=forbidden,
+        )
+
+        with self.assertRaises(RemoteMemoryError) as raised:
+            client.request("POST", "bridge_leases", payload={"conversation_key": "private:42"})
+
+        self.assertEqual(raised.exception.code, "forbidden")
+        self.assertEqual(getattr(raised.exception, "status", None), 403)
+
+    def test_lease_conflict_means_another_worker_claimed_conversation(self):
+        store = RemoteMemoryStore(LeaseErrorClient(409), bot_qq="100")
+
+        self.assertFalse(store.claim_conversation("private:42", "worker-a", 90))
+
+    def test_lease_permission_error_is_not_misreported_as_busy(self):
+        store = RemoteMemoryStore(LeaseErrorClient(403), bot_qq="100")
+
+        with self.assertRaises(RemoteMemoryError) as raised:
+            store.claim_conversation("private:42", "worker-a", 90)
+
+        self.assertEqual(raised.exception.status, 403)
 
 
 if __name__ == "__main__":

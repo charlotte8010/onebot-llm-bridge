@@ -741,6 +741,11 @@ class Bridge:
         """Ignore short-lived OneBot retries so one QQ message gets one reply."""
         if not message.message_id:
             return False
+        if self.memory_store is not None and self.memory_store.is_event_processed(
+            message.conversation_key,
+            message.message_id,
+        ):
+            return True
         key = f"{message.conversation_key}:{message.message_id}"
         now = time.monotonic()
         with self._state_lock:
@@ -758,6 +763,10 @@ class Bridge:
             while len(self._seen_events) > self.MAX_SEEN_EVENTS:
                 self._seen_events.popitem(last=False)
         return False
+
+    def _mark_event_processed(self, message: NormalizedMessage) -> None:
+        if self.memory_store is not None and message.message_id:
+            self.memory_store.mark_event_processed(message.conversation_key, message.message_id)
 
     def _looks_like_auto_reply(self, message: NormalizedMessage) -> bool:
         subtype = str(message.raw.get("sub_type", "")).strip().lower()
@@ -831,6 +840,20 @@ class Bridge:
         if self.memory_store is not None:
             self.memory_store.append(message)
         return previous
+
+    def _record_passive_group_message(self, message: NormalizedMessage) -> None:
+        if message.conversation_type != "group" or not is_meaningful(message):
+            return
+        group_allowlist = self.settings.group_allowlist
+        if self.settings.group_mode == "smart":
+            group_allowlist = group_allowlist | self._remote_groups
+        if message.conversation_id not in group_allowlist:
+            return
+        with self._state_lock:
+            context = self._context_for(message.conversation_key)
+            if message.message_id and any(item.message_id == message.message_id for item in context):
+                return
+            self._record_message(message)
 
     def _decision(self, message: NormalizedMessage):
         group_allowlist = self.settings.group_allowlist
@@ -1154,19 +1177,12 @@ class Bridge:
                 with self._state_lock:
                     self._topic_until[first.conversation_key] = time.time() + self.settings.followup_seconds
                     self._topic_text[first.conversation_key] = " ".join(item.text for item in messages if item.text)
-            self._schedule_summary(first.conversation_key, model_context, messages)
+            self._schedule_summary(first.conversation_key)
             release_lease()
             return {"handled": True, "reason": "reply", "bubbles": len(bubbles)}
 
-    def _schedule_summary(
-        self,
-        conversation_key: str,
-        context: list[NormalizedMessage],
-        messages: list[NormalizedMessage],
-    ) -> None:
+    def _schedule_summary(self, conversation_key: str) -> None:
         if not self.settings.summary_enabled or self.remote_memory is None:
-            return
-        if len(context) + len(messages) < self.settings.summary_min_messages:
             return
         previous = self._summary_timers.get(conversation_key)
         if previous is not None:
@@ -1419,15 +1435,19 @@ class Bridge:
             return {"handled": False, "reason": "duplicate_event"}
         if self._is_repeated_auto_reply(message):
             self._metric("events_ignored")
+            self._mark_event_processed(message)
             return {"handled": False, "reason": "repeated_auto_reply"}
         self._reset_active_timer(message.conversation_type, message.conversation_id)
         self._metric("events_received")
         self._ingest_remote(message)
         decision = self._decision(message)
         if not is_meaningful(message) or not decision.should_reply:
+            self._record_passive_group_message(message)
+            self._mark_event_processed(message)
             return {"handled": False, "reason": decision.reason}
         memory_result = self._handle_memory_command(message, decision.mode)
         if memory_result is not None:
+            self._mark_event_processed(message)
             return memory_result
         with self._state_lock:
             context = self._record_message(message)
@@ -1441,6 +1461,8 @@ class Bridge:
         except Exception:
             self._release_remote_lease_after_error(message.conversation_key)
             raise
+        if result.get("handled"):
+            self._mark_event_processed(message)
         result.setdefault("reason", decision.reason)
         return result
 
@@ -1453,15 +1475,19 @@ class Bridge:
             return {"accepted": False, "reason": "duplicate_event"}
         if self._is_repeated_auto_reply(message):
             self._metric("events_ignored")
+            self._mark_event_processed(message)
             return {"accepted": False, "reason": "repeated_auto_reply"}
         self._reset_active_timer(message.conversation_type, message.conversation_id)
         self._ingest_remote(message)
         decision = self._decision(message)
         if not is_meaningful(message) or not decision.should_reply:
+            self._record_passive_group_message(message)
+            self._mark_event_processed(message)
             self._metric("events_ignored")
             return {"accepted": False, "reason": decision.reason}
         memory_result = self._handle_memory_command(message, decision.mode)
         if memory_result is not None:
+            self._mark_event_processed(message)
             return {"accepted": True, **memory_result}
         key = message.conversation_key
         with self._state_lock:
@@ -1508,7 +1534,10 @@ class Bridge:
         if batch is None:
             return
         try:
-            self._process_batch(batch.messages, batch.context, batch.mode, batch.reply_to)
+            result = self._process_batch(batch.messages, batch.context, batch.mode, batch.reply_to)
+            if result.get("handled"):
+                for message in batch.messages:
+                    self._mark_event_processed(message)
             self._metric("batches_processed")
         except Exception as exc:
             self._release_remote_lease_after_error(batch.messages[0].conversation_key)
@@ -1521,13 +1550,16 @@ class Bridge:
             )
 
     def shutdown(self) -> None:
-        self._shutdown = True
         with self._state_lock:
-            batches = list(self._pending.values())
-            self._pending.clear()
-        for batch in batches:
-            if batch.timer is not None:
-                batch.timer.cancel()
+            if self._shutdown:
+                return
+            self._shutdown = True
+            pending_keys = list(self._pending)
+            for batch in self._pending.values():
+                if batch.timer is not None:
+                    batch.timer.cancel()
+        for key in pending_keys:
+            self._flush_batch(key)
         for timer in self._active_timers.values():
             timer.cancel()
         self._active_timers.clear()
@@ -1535,7 +1567,7 @@ class Bridge:
             timer.cancel()
         self._summary_timers.clear()
         if self._remote_executor is not None:
-            self._remote_executor.shutdown(wait=False, cancel_futures=True)
+            self._remote_executor.shutdown(wait=True, cancel_futures=False)
             self._remote_executor = None
         if self.memory_store is not None:
             self.memory_store.close()
@@ -1552,7 +1584,7 @@ class BridgeHandler(JsonHandler):
         )
 
     def do_POST(self) -> None:
-        if self.path != "/onebot":
+        if self.path not in {"/onebot", "/shutdown"}:
             self.write_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not_found"})
             return
         server: BridgeHTTPServer = self.server  # type: ignore[assignment]
@@ -1573,6 +1605,10 @@ class BridgeHandler(JsonHandler):
                 f"expected_length={len(server.event_token)}"
             )
             self.write_json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "unauthorized"})
+            return
+        if self.path == "/shutdown":
+            self.write_json(HTTPStatus.OK, {"ok": True, "service": "bridge", "stopping": True})
+            threading.Thread(target=server.shutdown, daemon=True).start()
             return
         try:
             event = self.parse_json_body(body)

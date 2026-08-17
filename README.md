@@ -331,6 +331,8 @@ python -m unittest discover -s tests -q
 
 ## 项目结构
 
+尚未完成的可靠性优化见 [`docs/ROADMAP.md`](docs/ROADMAP.md)。
+
 ```text
 app.py                              Bridge 入口
 bot_service.py                      Bot 服务入口

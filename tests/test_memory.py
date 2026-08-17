@@ -56,3 +56,23 @@ class SQLiteMemoryStoreTests(unittest.TestCase):
             self.assertTrue(store.remove_fact("user:123", "喜欢记录的地平线"))
             self.assertEqual(store.load_facts("user:123"), [])
             store.close()
+
+    def test_processed_event_receipt_survives_close_and_reopen(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "context.sqlite3"
+            store = SQLiteMemoryStore(path)
+            try:
+                mark_processed = getattr(store, "mark_event_processed", None)
+                is_processed = getattr(store, "is_event_processed", None)
+                self.assertIsNotNone(mark_processed)
+                self.assertIsNotNone(is_processed)
+                mark_processed("group:999", "message-42")
+                self.assertTrue(is_processed("group:999", "message-42"))
+                self.assertFalse(is_processed("group:999", "message-43"))
+                self.assertFalse(is_processed("group:888", "message-42"))
+            finally:
+                store.close()
+
+            reopened = SQLiteMemoryStore(path)
+            self.assertTrue(reopened.is_event_processed("group:999", "message-42"))
+            reopened.close()

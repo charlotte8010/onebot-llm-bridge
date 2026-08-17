@@ -49,6 +49,19 @@ class SQLiteMemoryStore:
         self._connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_facts_scope ON facts(scope_key, id)"
         )
+        self._connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS processed_events (
+                conversation_key TEXT NOT NULL,
+                event_id TEXT NOT NULL,
+                processed_at INTEGER NOT NULL,
+                PRIMARY KEY (conversation_key, event_id)
+            )
+            """
+        )
+        self._connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_processed_events_time ON processed_events(processed_at)"
+        )
         self._connection.commit()
 
     def append(self, message: NormalizedMessage) -> None:
@@ -117,6 +130,36 @@ class SQLiteMemoryStore:
             except (KeyError, TypeError, ValueError, json.JSONDecodeError):
                 continue
         return result
+
+    def mark_event_processed(self, conversation_key: str, event_id: str) -> None:
+        value = event_id.strip()
+        if not value:
+            return
+        with self._lock:
+            self._connection.execute(
+                """
+                INSERT INTO processed_events(conversation_key, event_id, processed_at)
+                VALUES (?, ?, strftime('%s', 'now'))
+                ON CONFLICT(conversation_key, event_id)
+                DO UPDATE SET processed_at = excluded.processed_at
+                """,
+                (conversation_key, value),
+            )
+            self._connection.execute(
+                "DELETE FROM processed_events WHERE processed_at < strftime('%s', 'now') - 2592000"
+            )
+            self._connection.commit()
+
+    def is_event_processed(self, conversation_key: str, event_id: str) -> bool:
+        value = event_id.strip()
+        if not value:
+            return False
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT 1 FROM processed_events WHERE conversation_key = ? AND event_id = ?",
+                (conversation_key, value),
+            ).fetchone()
+        return row is not None
 
     def close(self) -> None:
         with self._lock:

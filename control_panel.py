@@ -573,6 +573,24 @@ def probe_service(base_url: str, token: str = "") -> str:
     return str(payload.get("service", "ok"))
 
 
+def request_bridge_shutdown(port: int, token: str = "", timeout: float = 2.0) -> dict[str, object]:
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    payload = _json_request(
+        Request(
+            f"http://127.0.0.1:{port}/shutdown",
+            data=b"{}",
+            headers=headers,
+            method="POST",
+        ),
+        timeout=timeout,
+    )
+    if payload.get("ok") is False:
+        raise ValueError(str(payload.get("error", "Bridge 拒绝关闭请求")))
+    return payload
+
+
 def probe_models(base_url: str, api_key: str) -> int:
     request = Request(
         f"{base_url.rstrip('/')}/models",
@@ -727,10 +745,26 @@ class ServiceProcess:
             self.log.put(f"[{self.name}] {line.rstrip()}")
         self.log.put(f"[{self.name}] exited with code {process.poll()}")
 
-    def stop(self) -> None:
+    def stop(
+        self,
+        *,
+        graceful_request: Callable[[], object] | None = None,
+        graceful_timeout: float = 3.0,
+    ) -> None:
         if not self.running():
             return
         assert self.process is not None
+        if graceful_request is not None:
+            try:
+                graceful_request()
+                self.process.wait(timeout=max(0.1, graceful_timeout))
+                return
+            except subprocess.TimeoutExpired:
+                self.log.put(f"[{self.name}] 优雅停止超时，改用强制停止")
+            except Exception as exc:
+                self.log.put(f"[{self.name}] 优雅停止失败，改用强制停止：{type(exc).__name__}: {exc}")
+            if not self.running():
+                return
         self.process.terminate()
         try:
             self.process.wait(timeout=3)
@@ -2403,8 +2437,21 @@ class ControlPanel(tk.Tk):
         self.after(500, self.start_all)
 
     def stop_all(self) -> None:
+        bridge_port = self._port_value(self.bridge_port, 8766)
+        try:
+            model_timeout = float(self.timeout.get().strip() or "60")
+        except ValueError:
+            model_timeout = 60.0
+        graceful_timeout = max(10.0, min(130.0, model_timeout + 5.0))
+        if bridge_port is None:
+            self.bridge.stop()
+        else:
+            event_token = self.event_token.get().strip()
+            self.bridge.stop(
+                graceful_request=lambda: request_bridge_shutdown(bridge_port, event_token),
+                graceful_timeout=graceful_timeout,
+            )
         self.bot.stop()
-        self.bridge.stop()
         self._append_log("已停止控制台启动的 Bot 和 Bridge；远程 Bot 不会被此按钮停止")
 
     def _refresh_bot_target_hint(self) -> None:

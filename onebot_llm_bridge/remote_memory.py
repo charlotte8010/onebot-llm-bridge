@@ -16,8 +16,9 @@ from .models import NormalizedMessage
 class RemoteMemoryError(RuntimeError):
     """A sanitized remote-memory failure."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, *, status: int | None = None) -> None:
         self.code = code
+        self.status = status
         super().__init__(message)
 
     @property
@@ -68,7 +69,11 @@ class SupabaseRestClient:
                 raw = response.read()
         except HTTPError as exc:
             code = "http_error"
-            if exc.code == 429:
+            if exc.code == 401:
+                code = "unauthorized"
+            elif exc.code == 403:
+                code = "forbidden"
+            elif exc.code == 429:
                 code = "rate_limited"
             elif exc.code >= 500:
                 code = "server_error"
@@ -83,7 +88,11 @@ class SupabaseRestClient:
                 code = "schema_missing"
                 detail = "Supabase 表不存在，请先执行项目中的迁移 SQL"
             suffix = f": {detail}" if detail else ""
-            raise RemoteMemoryError(code, f"remote memory returned HTTP {exc.code}{suffix}") from exc
+            raise RemoteMemoryError(
+                code,
+                f"remote memory returned HTTP {exc.code}{suffix}",
+                status=exc.code,
+            ) from exc
         except (HTTPException, URLError, TimeoutError, ConnectionError, OSError, ssl.SSLError) as exc:
             raise RemoteMemoryError("network_error", "remote memory request failed") from exc
         try:
@@ -278,7 +287,7 @@ class RemoteMemoryStore:
             )
             return True
         except RemoteMemoryError as exc:
-            if exc.code == "http_error":
+            if exc.status == 409:
                 return False
             raise
 
